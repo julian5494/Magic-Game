@@ -597,7 +597,6 @@ function mulliganDecision(state: GameState, pid: PlayerId): Omit<Decision, 'id'>
 
 function shouldAutoPass(state: GameState, pid: PlayerId): boolean {
   const p = getPlayer(state, pid);
-  if (p.isBot) return false;
   const meaningful = legalActions(state, pid).filter((a) => a.type !== 'manaTap');
   if (meaningful.length === 0) return true;
   const top = state.stack[state.stack.length - 1];

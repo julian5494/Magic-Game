@@ -194,6 +194,15 @@ export class Room {
     if (this.botTimer || !this.state || this.state.phase === 'over') return;
     const bots = this.seats.filter((s) => s.isBot);
     if (!bots.length) return;
+    // Passing and routine decisions happen almost instantly; real plays get a short pause so humans can follow.
+    let delay = BOT_DELAY_MS;
+    for (const b of bots) {
+      const next = chooseBotAction(this.state, b.playerId);
+      if (!next) continue;
+      const routine = next.type === 'pass' || (next.type === 'decide' && this.state.decisions[0]?.kind !== 'declareAttackers');
+      delay = routine ? 40 : BOT_DELAY_MS;
+      break;
+    }
     this.botTimer = setTimeout(() => {
       this.botTimer = null;
       if (!this.state) return;
@@ -213,7 +222,7 @@ export class Room {
         }
         return;
       }
-    }, BOT_DELAY_MS);
+    }, delay);
   }
 }
 
