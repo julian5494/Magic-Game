@@ -1,0 +1,50 @@
+import type { CardDef } from '../cardtypes';
+
+const token = (name: string, colors: CardDef['colors'], subtypes: string[], p: number, t: number, extra: Partial<CardDef> = {}): CardDef => ({
+  name,
+  types: ['Creature'],
+  subtypes,
+  power: p,
+  toughness: t,
+  colors,
+  token: true,
+  ...extra,
+});
+
+export const TOKENS: CardDef[] = [
+  token('Soldier Token', ['W'], ['Soldier'], 1, 1),
+  token('Spirit Token', ['W'], ['Spirit'], 1, 1, { keywords: ['Flying'], text: 'Flying' }),
+  token('Bird Token', ['W'], ['Bird'], 1, 1, { keywords: ['Flying'], text: 'Flying' }),
+  token('Lifelink Soldier Token', ['W'], ['Soldier'], 1, 1, { keywords: ['Lifelink'], text: 'Lifelink' }),
+  token('Haste Soldier Token', ['R', 'W'], ['Soldier'], 1, 1, { keywords: ['Haste'], text: 'Haste' }),
+  token('Beast Token', ['G'], ['Beast'], 3, 3),
+  token('Plant Token', ['G'], ['Plant'], 0, 1),
+  token('Elf Warrior Token', ['G'], ['Elf', 'Warrior'], 1, 1),
+  token('Goblin Token', ['R'], ['Goblin'], 1, 1),
+  token('Elemental Token', ['R'], ['Elemental'], 1, 1),
+  token('Drake Token', ['U'], ['Drake'], 2, 2, { keywords: ['Flying'], text: 'Flying' }),
+  token('Wurm Token', ['G'], ['Wurm'], 5, 5, { keywords: ['Trample'], text: 'Trample' }),
+  { ...token('Deathtouch Wurm Token', [], ['Phyrexian', 'Wurm'], 3, 3, { keywords: ['Deathtouch'], text: 'Deathtouch' }), types: ['Artifact', 'Creature'] },
+  { ...token('Lifelink Wurm Token', [], ['Phyrexian', 'Wurm'], 3, 3, { keywords: ['Lifelink'], text: 'Lifelink' }), types: ['Artifact', 'Creature'] },
+  token('Zombie Token', ['B'], ['Zombie'], 2, 2),
+  token('Insect Token', ['B', 'G'], ['Insect'], 1, 1),
+  token('Faerie Rogue Token', ['B'], ['Faerie', 'Rogue'], 1, 1, { keywords: ['Flying'], text: 'Flying' }),
+  {
+    name: 'Clue Token',
+    types: ['Artifact'],
+    subtypes: ['Clue'],
+    colors: [],
+    token: true,
+    text: '{2}, Sacrifice this artifact: Draw a card.',
+    abilities: [{ text: '{2}, Sacrifice: Draw a card.', cost: { mana: '{2}', sacrificeSelf: true }, effect: (ctx) => ctx.draw(ctx.controller, 1), aiValue: 1 }],
+  },
+  {
+    name: 'Treasure Token',
+    types: ['Artifact'],
+    subtypes: ['Treasure'],
+    colors: [],
+    token: true,
+    text: '{T}, Sacrifice this artifact: Add one mana of any color.',
+    abilities: [{ text: '{T}, Sacrifice: Add one mana of any color.', cost: { tap: true, sacrificeSelf: true }, mana: { colors: 'any' } }],
+  },
+];
