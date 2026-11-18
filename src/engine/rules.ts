@@ -142,6 +142,9 @@ function eventMatches(
     case 'opponentEndStep':
       ok = e.t === 'step' && e.step === 'end' && e.active !== self.controller;
       break;
+    case 'eachDrawStep':
+      ok = e.t === 'step' && e.step === 'draw';
+      break;
     case 'yourDrawStep':
       ok = e.t === 'step' && e.step === 'draw' && e.active === self.controller;
       break;
@@ -518,6 +521,7 @@ export function startTurn(state: GameState, pid: PlayerId): void {
   state.activePlayer = pid;
   for (const p of state.players) {
     p.landsPlayed = 0;
+    p.extraLandsThisTurn = 0;
     state.spellsThisTurn = 0;
     p.lifeGainedThisTurn = 0;
     if (p.passUntilTurn !== null && p.passUntilTurn < state.turn) p.passUntilTurn = null;

@@ -34,7 +34,20 @@ After importing, you get a coverage report:
 - **Partly automated**: playable, but some abilities (for example flashback or a cost reduction) aren't automated yet. Those abilities simply don't happen, and the card shows a "!" with details.
 - **Can't be played yet**: the card has a drawback or core effect the engine can't enforce (for example "doesn't untap during your untap step" or "As an additional cost, discard a card"). These stay in your deck but can't be cast, because casting them without the drawback would be cheating.
 
-On the 525 most-played Commander cards, about half are fully automated today. Coverage grows as patterns are added to the parser or cards are hand-scripted in `src/engine/cards/`. Run `npx tsx tests/coverage.ts --list` to see what's missing.
+The server downloads Scryfall's free **bulk card database** (every card, about 25 MB, refreshed weekly) into `.cache/`, so every Commander-legal card is known locally. Imports don't depend on Scryfall being reachable, and only specific printings (for art) are looked up live.
+
+Current automation, across all 32,700 Commander-legal cards (run `npx tsx tests/coverage-all.ts`):
+
+| Cards (by EDHREC popularity) | Fully automated | Playable, some abilities missing | Can't be played yet |
+|---|---|---|---|
+| Top 100 | 82% | 12% | 6% |
+| Top 500 | 60% | 32% | 9% |
+| Top 2,000 | 35% | 51% | 14% |
+| All cards | 22% | 61% | 16% |
+
+Tools for growing coverage:
+- `npx tsx tests/signatures.ts 2000` lists the most common sentences and triggers the parser still fails on.
+- `npx tsx tests/stress-bulk.ts 40 40000` has bots play games with random decks from the whole card pool, to catch runtime errors.
 
 ## Fair play: no manual actions
 
@@ -58,6 +71,7 @@ Unlike tabletop simulators, there's no way to drag a card, draw, shuffle, untap 
 - **Combat**: attacking specific opponents, blocking (flying/reach, menace, unblockable), first strike, double strike, trample, deathtouch and lifelink.
 - **State-based actions**: lethal damage, 0 toughness, the legend rule, aura/equipment cleanup, and counter cancellation. Players lose at 0 life, on drawing from an empty library, or at 21 commander damage.
 - **Commander rules**: 40 life, command zone, commander tax, partners, the choice to move your commander to the command zone, and a free first mulligan (London mulligan).
+- **Card mechanics**: planeswalkers (loyalty abilities, damage, being attacked); kicker, flashback, overload and cycling; alternative and free casts; ward; storm and spell copies; "counter unless pays" and Rhystic Study-style taxes; clones and token copies; exile-and-play; modal double-faced lands; counting ("for each…", "equal to…"); variable power/toughness; surveil, proliferate and monarch; activation restrictions; and many trigger types.
 
 ## Layout
 
@@ -75,6 +89,6 @@ The server needs outbound HTTPS to `api.scryfall.com` and `archidekt.com` (and t
 
 ## Not yet supported
 
-Planeswalker loyalty abilities, the back faces of double-faced cards, copy/clone effects, damage division, kicker, flashback, protection and replacement effects (Doubling Season, etc.). Cards that need these are marked as described above. Bots are heuristic and fairly weak.
+Transforming double-faced cards and back-face spells, sagas and classes, "choose a creature type", replacement effects (Doubling Season, etc.), protection, damage division, and modal triggered abilities. Cards that need these are marked as described above. Bots are heuristic and fairly weak.
 
 Card images are loaded from Scryfall. This is unofficial fan content permitted under the Wizards of the Coast Fan Content Policy; it is not approved or endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC.

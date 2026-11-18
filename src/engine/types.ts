@@ -105,6 +105,8 @@ export interface Player {
   holding?: boolean;
   passUntilTurn: number | null;
   lifeGainedThisTurn: number;
+  /** Extra land drops granted this turn ("You may play an additional land this turn"). */
+  extraLandsThisTurn?: number;
 }
 
 export interface StackItem {

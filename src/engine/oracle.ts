@@ -765,6 +765,38 @@ const SENTENCES: SentenceParser[] = [
       handlers: { [k]: (ctx, _a, data) => ctx.counterSpell(data.stackId) },
     };
   },
+  // "Draw a card unless that player pays {1}" (Rhystic Study, Smothering Tithe style taxes)
+  (s) => {
+    const m = s.match(/^(draw a card|create a treasure token) unless (that player|its controller) pays (\{[0-9WUBRGC]+\}(?:\{[0-9WUBRGC]+\})*)$/i);
+    if (!m) return null;
+    const subject = m[2];
+    const k = hkey();
+    const reward = m[1].toLowerCase();
+    return {
+      targets: [],
+      run: (ctx, base, sc) => {
+        const who = players(subject);
+        const payer = typeof who === 'function' ? who(ctx, base, sc)[0] : null;
+        if (payer && payer !== ctx.controller) ctx.unlessPays(payer, m[3].toUpperCase(), k);
+      },
+      handlers: {
+        [k]: (ctx) => {
+          if (reward === 'draw a card') ctx.draw(ctx.controller, 1);
+          else ctx.createToken(ctx.controller, 'Treasure Token');
+        },
+      },
+    };
+  },
+  (s) => {
+    if (!/^you may play an additional land this turn$/i.test(s)) return null;
+    return {
+      targets: [],
+      run: (ctx) => {
+        const p = getPlayer(ctx.state, ctx.controller);
+        p.extraLandsThisTurn = (p.extraLandsThisTurn ?? 0) + 1;
+      },
+    };
+  },
   (s) => {
     const m = s.match(/^copy (target .*spell)$/i);
     if (!m) return null;
@@ -1056,6 +1088,10 @@ function parseSentence(raw: string): Piece[] | null {
 /** Parse an effect paragraph into targets + effect. Registers continuations on `def.handlers`. */
 function normalizeMulti(text: string): string {
   text = text.replace(
+    /(that player|its controller) may pay (\{[^.]+\})\. If (?:the player|they|that player) (?:doesn't|don't|does not), you (draw a card|create a Treasure token)\.?/gi,
+    (_all, who, cost, reward) => `${reward} unless ${who} pays ${cost}.`,
+  );
+  text = text.replace(
     /Exile the top (card|\w+ cards) of your library\. (?:You may play (?:it|that card|them|those cards) this turn|Until (?:the )?end of your next turn, you may play (?:it|that card|them|those cards))\.?/gi,
     (all, what) => {
       const n = what === 'card' ? 1 : num(what.split(' ')[0]);
@@ -1243,6 +1279,7 @@ function parseTrigger(cond: string): TrigSpec[] | null {
     [/^at the beginning of (?:each|the) end step$/, 'eachEndStep'],
     [/^at the beginning of each opponent's end step$/, 'opponentEndStep'],
     [/^at the beginning of your draw step$/, 'yourDrawStep'],
+    [/^at the beginning of each player's draw step$/, 'eachDrawStep'],
     [/^at the beginning of combat on your turn$/, 'yourBeginCombat'],
     [/^at the beginning of each combat$/, 'eachBeginCombat'],
     [/^whenever you draw a card$/, 'youDraw'],

@@ -183,6 +183,7 @@ export type TriggerOn =
   | 'eachEndStep'
   | 'opponentEndStep'
   | 'yourDrawStep'
+  | 'eachDrawStep'
   | 'yourBeginCombat'
   | 'eachBeginCombat'
   | 'youDraw'

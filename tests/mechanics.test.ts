@@ -268,3 +268,26 @@ describe('parsed mechanics', () => {
     expect(() => act(s, A, { type: 'playLand', cardId: c.id, back: true })).toThrow(RulesError);
   });
 });
+
+describe('opponent taxes', () => {
+  it('Rhystic Study: opponent pays {1} or you draw', () => {
+    card({ name: 'Test Rhystic', mana_cost: '{2}{U}', type_line: 'Enchantment', oracle_text: 'Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.' });
+    card({ name: 'Test Tithe', mana_cost: '{1}{W}', type_line: 'Enchantment', oracle_text: "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you create a Treasure token." });
+    expect(findDef('Test Tithe')!.unsupported ?? []).toEqual([]);
+    let { s, A, B } = setup();
+    put(s, B, 'Test Rhystic');
+    lands(s, A, 'Mountain', 1);
+    const bolt = put(s, A, 'Lightning Bolt', 'hand');
+    s = act(s, A, { type: 'cast', cardId: bolt.id, targets: [{ type: 'player', id: B }] });
+    for (let i = 0; i < 10 && !s.decisions.some((d) => d.handler === 'core:unlessPay'); i++) {
+      const d = s.decisions[0];
+      if (d) s = act(s, d.player, { type: 'decide', decisionId: d.id, answer: { option: 'yes' } });
+      else s = act(s, s.priority!, { type: 'pass' });
+    }
+    const d = s.decisions.find((x) => x.handler === 'core:unlessPay')!;
+    expect(d.player).toBe(A);
+    const before = hand(s, B).length;
+    s = act(s, A, { type: 'decide', decisionId: d.id, answer: { option: 'no' } });
+    expect(hand(s, B).length).toBe(before + 1);
+  });
+});

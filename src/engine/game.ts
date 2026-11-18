@@ -170,6 +170,7 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
     .map((c) => c.id);
   const landDrops =
     1 +
+    (p.extraLandsThisTurn ?? 0) +
     battlefieldCards(state)
       .filter((c) => c.controller === pid)
       .flatMap((c) => defOf(c).statics ?? [])
