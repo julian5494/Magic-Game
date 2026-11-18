@@ -85,6 +85,7 @@ export function checkDeck(commanders: string[], cards: string[], opts: { art?: R
   for (const [name, n] of counts) {
     const def = findDef(name)!;
     if (def.token) errors.push(`${name} is a token, not a card.`);
+    if (def.isBackFace) errors.push(`${name} is the back face of a double-faced card; list the front face instead.`);
     const basic = (def.supertypes ?? []).includes('Basic');
     const anyNumber = /any number of cards named/i.test(def.text ?? '');
     if (n > 1 && !basic && !anyNumber) errors.push(`Singleton: ${n} copies of ${name}.`);

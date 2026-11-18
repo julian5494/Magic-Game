@@ -614,6 +614,19 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
         privateCards: true,
       });
     },
+    transform(id) {
+      const c = state.cards[id];
+      if (!c || c.zone !== 'battlefield') return;
+      const def = defOf(c);
+      if (!def.backFace) return;
+      const front = c.frontDef ?? c.def;
+      const toBack = !c.frontDef;
+      c.def = toBack ? def.backFace : front;
+      c.frontDef = toBack ? front : undefined;
+      const now = defOf(c);
+      if (toBack && now.loyalty && c.counters.loyalty === undefined) c.counters.loyalty = now.loyalty;
+      log(state, `${toBack ? front : def.name} transforms into ${now.name}.`);
+    },
     proliferate() {
       // Auto-chosen: grow counters on your permanents and players' poison; -1/-1 on opponents' things.
       for (const c of battlefieldCards(state)) {

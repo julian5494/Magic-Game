@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { act, buildPrecon, createGame, legalActions, RulesError } from '../src/engine';
 import type { GameState, PlayerId } from '../src/engine';
+import { checkDeck } from '../src/engine/deck';
 import { convertScryfall, type ScryCard } from '../src/engine/oracle';
 import { makeCard, moveCard } from '../src/engine/ops';
 import { findDef, registerGenerated } from '../src/engine/registry';
@@ -289,5 +290,96 @@ describe('opponent taxes', () => {
     const before = hand(s, B).length;
     s = act(s, A, { type: 'decide', decisionId: d.id, answer: { option: 'no' } });
     expect(hand(s, B).length).toBe(before + 1);
+  });
+});
+
+describe('transforming double-faced cards', () => {
+  const dfc = (name: string, front: string, back: string, backType: string, extra: object = {}) => {
+    if (!findDef(name.split(' // ')[0])) {
+      registerGenerated(
+        convertScryfall({
+          name,
+          layout: 'transform',
+          color_identity: ['U'],
+          card_faces: [
+            { name: name.split(' // ')[0], mana_cost: '{U}', type_line: 'Creature — Human Wizard', power: '1', toughness: '1', oracle_text: front },
+            { name: name.split(' // ')[1], type_line: backType, oracle_text: back, colors: ['U'], ...extra },
+          ],
+        } as ScryCard),
+      );
+    }
+    return name.split(' // ')[0];
+  };
+
+  it('transforms when its ability says so and reverts when it leaves the battlefield', () => {
+    const front = dfc('Test Apprentice // Test Archmage', 'Whenever you cast an instant or sorcery spell, transform this creature.', 'Flying', 'Creature — Human Wizard');
+    expect(findDef(front)!.unsupported ?? []).toEqual([]);
+    findDef('Test Archmage')!.power = 3;
+    findDef('Test Archmage')!.toughness = 2;
+    let { s, A, B } = setup();
+    lands(s, A, 'Mountain', 1);
+    const c = put(s, A, front);
+    const bolt = put(s, A, 'Lightning Bolt', 'hand');
+    s = resolveAll(act(s, A, { type: 'cast', cardId: bolt.id, targets: [{ type: 'player', id: B }] }));
+    expect(s.cards[c.id].def).toBe('Test Archmage');
+    expect(getPT(s, s.cards[c.id])).toEqual({ power: 3, toughness: 2 });
+    moveCard(s, c.id, 'hand');
+    expect(s.cards[c.id].def).toBe(front);
+  });
+
+  it('"exile it, then return it to the battlefield transformed" flips it, including into a planeswalker', () => {
+    const front = dfc(
+      'Test Hero // Test Walker Side',
+      'At the beginning of your end step, exile this creature, then return it to the battlefield transformed under its owner\'s control.',
+      '+1: Draw a card.',
+      'Legendary Planeswalker — Test',
+      { loyalty: '4' },
+    );
+    expect(findDef(front)!.unsupported ?? []).toEqual([]);
+    let { s, A } = setup();
+    const c = put(s, A, front);
+    for (let i = 0; i < 40 && s.cards[c.id].def === front; i++) {
+      const d = s.decisions[0];
+      if (d) s = act(s, d.player, { type: 'decide', decisionId: d.id, answer: d.kind === 'declareAttackers' ? { attackers: [] } : { option: 'yes', cards: [] } });
+      else s = act(s, s.priority!, { type: 'pass' });
+    }
+    expect(s.cards[c.id].def).toBe('Test Walker Side');
+    expect(s.cards[c.id].counters.loyalty).toBe(4);
+  });
+
+  it('back faces can\'t be put in a deck on their own', () => {
+    dfc('Test Apprentice // Test Archmage', '', '', 'Creature — Human Wizard');
+    const r = checkDeck(['Adeliz, the Cinder Wind'], ['Test Archmage', ...Array(98).fill('Island')]);
+    expect(r.errors.join(' ')).toMatch(/back face/);
+  });
+});
+
+describe('werewolves', () => {
+  it('transform at upkeep if no spells were cast last turn, and back after two spells', () => {
+    if (!findDef('Test Villager')) {
+      registerGenerated(
+        convertScryfall({
+          name: 'Test Villager // Test Werewolf',
+          layout: 'transform',
+          color_identity: ['R'],
+          card_faces: [
+            { name: 'Test Villager', mana_cost: '{1}{R}', type_line: 'Creature — Human Werewolf', power: '2', toughness: '2', oracle_text: 'At the beginning of each upkeep, if no spells were cast last turn, transform this creature.' },
+            { name: 'Test Werewolf', type_line: 'Creature — Werewolf', power: '4', toughness: '4', colors: ['R'], oracle_text: 'At the beginning of each upkeep, if a player cast two or more spells last turn, transform this creature.' },
+          ],
+        } as ScryCard),
+      );
+    }
+    expect(findDef('Test Villager')!.unsupported ?? []).toEqual([]);
+    expect(findDef('Test Werewolf')!.unsupported ?? []).toEqual([]);
+    let { s, A } = setup();
+    const c = put(s, A, 'Test Villager');
+    const startTurn = s.turn;
+    for (let i = 0; i < 80 && s.turn < startTurn + 2; i++) {
+      const d = s.decisions[0];
+      if (d) s = act(s, d.player, { type: 'decide', decisionId: d.id, answer: d.kind === 'declareAttackers' ? { attackers: [] } : d.kind === 'declareBlockers' ? { blocks: [] } : { option: 'yes', cards: d.cards?.slice(0, d.min ?? 0) ?? [] } });
+      else s = act(s, s.priority!, { type: 'pass' });
+    }
+    // No spells were cast on the turn the Villager arrived, so it flipped at the next upkeep.
+    expect(s.cards[c.id].def).toBe('Test Werewolf');
   });
 });

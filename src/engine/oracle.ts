@@ -386,7 +386,10 @@ function action(subject: string, bias: 'opponent' | 'self', fn: (ctx: Ctx, id: s
   return {
     targets: subj.targets,
     run: (ctx, base, s) => {
-      for (const id of subj.each!(ctx, base, s)) fn(ctx, id, s);
+      for (const id of subj.each!(ctx, base, s)) {
+        fn(ctx, id, s);
+        s.lastId = s.lastId ?? id;
+      }
     },
   };
 }
@@ -729,6 +732,11 @@ const SENTENCES: SentenceParser[] = [
     const n = m && num(m[1]);
     return n === null || n === undefined ? null : { targets: [], run: () => {}, async: 'surveil', scryN: n };
   },
+  (s) => {
+    const m = s.match(/^transform (cardname|it|that creature|that permanent)$/i);
+    if (!m) return null;
+    return action(m[1], 'self', (ctx, id) => ctx.transform(id));
+  },
   (s) => (/^proliferate$/i.test(s) ? { targets: [], run: (ctx) => ctx.proliferate() } : null),
   (s) => (/^you become the monarch$/i.test(s) ? { targets: [], run: (ctx) => ctx.becomeMonarch(ctx.controller) } : null),
   (s) => {
@@ -885,14 +893,15 @@ const SENTENCES: SentenceParser[] = [
     return { targets: [], run: (ctx) => ctx.players().forEach((p) => [...getPlayer(ctx.state, p).hand].forEach((id) => ctx.moveCard(id, 'graveyard'))) };
   },
   (s) => {
-    const m = s.match(/^return (?:it|that card|the exiled card|those cards) to the battlefield( tapped)? under (your|its owner's|their owners') control$/i);
+    const m = s.match(/^return (?:it|that card|the exiled card|those cards|CARDNAME) to the battlefield( tapped)?(?:( transformed)| and (transformed))? under (your|its owner's|their owners') control$/i);
     if (!m) return null;
     return {
       targets: [],
       run: (ctx, _b, sc) => {
         const c = sc.lastId ? ctx.state.cards[sc.lastId] : null;
         if (c && (c.zone === 'exile' || c.zone === 'graveyard')) {
-          ctx.moveCard(c.id, 'battlefield', { tapped: !!m[1], controller: m[2].toLowerCase() === 'your' ? ctx.controller : c.owner });
+          ctx.moveCard(c.id, 'battlefield', { tapped: !!m[1], controller: m[4].toLowerCase() === 'your' ? ctx.controller : c.owner });
+          if (m[2] || m[3]) ctx.transform(c.id);
         }
       },
     };
@@ -1054,6 +1063,14 @@ function parseSentence(raw: string): Piece[] | null {
   for (const p of SENTENCES) {
     const r = p(s);
     if (r) return [r];
+  }
+  const cond = s.match(/^if (.+?), (.+)$/i);
+  if (cond) {
+    const test = parseIfCondition(cond[1]);
+    const inner = test && parseSentence(cond[2].charAt(0).toUpperCase() + cond[2].slice(1));
+    if (test && inner) {
+      return inner.map((p) => ({ ...p, run: (ctx, base, sc) => (test(ctx.state, ctx.controller) ? p.run(ctx, base, sc) : undefined) }));
+    }
   }
   if (/for each|where X is|equal to/i.test(s)) {
     const r = amountSentence(s);
@@ -1373,6 +1390,26 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
   return null;
 }
 
+/** Conditions for "if ..., <effect>" (checked as the ability resolves). */
+function parseIfCondition(text: string): ((state: GameState, pid: PlayerId) => boolean) | null {
+  const t = text.trim();
+  if (/^no spells were cast last turn$/i.test(t)) return (s) => (s.spellsLastTurn ?? 0) === 0;
+  if (/^a player cast two or more spells last turn$/i.test(t)) return (s) => (s.spellsLastTurn ?? 0) >= 2;
+  let m = t.match(/^you gained (\w+) or more life this turn$/i);
+  if (m) {
+    const n = num(m[1]);
+    if (typeof n !== 'number') return null;
+    return (s, pid) => getPlayer(s, pid).lifeGainedThisTurn >= n;
+  }
+  m = t.match(/^you have (\w+) or (more|less) life$/i);
+  if (m) {
+    const n = num(m[1]);
+    if (typeof n !== 'number') return null;
+    return (s, pid) => (m![2].toLowerCase() === 'more' ? getPlayer(s, pid).life >= n : getPlayer(s, pid).life <= n);
+  }
+  return parseControlCondition(t);
+}
+
 /** "you control a Swamp or a Mountain", "you control three or more artifacts", "it's your turn". */
 function parseControlCondition(text: string): ((state: GameState, pid: PlayerId) => boolean) | null {
   const t = text.trim().replace(/\.$/, '');
@@ -1520,6 +1557,17 @@ export function convertScryfall(card: ScryCard): CardDef {
     if (!findDef(b.name)) registerCards([backDef]);
     def.backFace = b.name;
     if (!backDef.types.includes('Land')) def.unsupported!.push(`Back face (${b.name}) can't be cast yet`);
+  } else if (card.card_faces && card.card_faces.length > 1 && card.layout === 'transform') {
+    // Transforming double-faced cards: the back face is registered as its own card and the
+    // permanent switches to it when an effect transforms it (it reverts when it leaves the battlefield).
+    const b = card.card_faces[1];
+    if (!findDef(b.name)) {
+      const backDef = convertScryfall({ ...b, color_identity: card.color_identity, legalities: card.legalities, layout: 'normal' });
+      backDef.backFace = name; // transforming the back face turns it back to the front
+      backDef.isBackFace = true;
+      registerCards([backDef]);
+    }
+    def.backFace = b.name;
   } else if (card.card_faces && card.card_faces.length > 1 && card.layout !== 'split') {
     def.unsupported!.push(`Other face (${card.card_faces.slice(1).map((f) => f.name).join(', ')}) isn't playable yet`);
   }

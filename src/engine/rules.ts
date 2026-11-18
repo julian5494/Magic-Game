@@ -517,6 +517,7 @@ export function checkStateBased(state: GameState): boolean {
 // ---------- Turn structure ----------
 
 export function startTurn(state: GameState, pid: PlayerId): void {
+  state.spellsLastTurn = state.spellsThisTurn ?? 0;
   state.turn++;
   state.activePlayer = pid;
   for (const p of state.players) {

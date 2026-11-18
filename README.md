@@ -71,7 +71,7 @@ Unlike tabletop simulators, there's no way to drag a card, draw, shuffle, untap 
 - **Combat**: attacking specific opponents, blocking (flying/reach, menace, unblockable), first strike, double strike, trample, deathtouch and lifelink.
 - **State-based actions**: lethal damage, 0 toughness, the legend rule, aura/equipment cleanup, and counter cancellation. Players lose at 0 life, on drawing from an empty library, or at 21 commander damage.
 - **Commander rules**: 40 life, command zone, commander tax, partners, the choice to move your commander to the command zone, and a free first mulligan (London mulligan).
-- **Card mechanics**: planeswalkers (loyalty abilities, damage, being attacked); kicker, flashback, overload and cycling; alternative and free casts; ward; storm and spell copies; "counter unless pays" and Rhystic Study-style taxes; clones and token copies; exile-and-play; modal double-faced lands; counting ("for each…", "equal to…"); variable power/toughness; surveil, proliferate and monarch; activation restrictions; and many trigger types.
+- **Card mechanics**: planeswalkers (loyalty abilities, damage, being attacked); kicker, flashback, overload and cycling; alternative and free casts; ward; storm and spell copies; "counter unless pays" and Rhystic Study-style taxes; clones and token copies; exile-and-play; transforming double-faced cards (including werewolves) and modal double-faced lands; counting ("for each…", "equal to…"); variable power/toughness; surveil, proliferate and monarch; activation restrictions; and many trigger types.
 
 ## Layout
 
@@ -89,6 +89,6 @@ The server needs outbound HTTPS to `api.scryfall.com` and `archidekt.com` (and t
 
 ## Not yet supported
 
-Transforming double-faced cards and back-face spells, sagas and classes, "choose a creature type", replacement effects (Doubling Season, etc.), protection, damage division, and modal triggered abilities. Cards that need these are marked as described above. Bots are heuristic and fairly weak.
+Back-face spells of modal double-faced cards, daybound/nightbound, sagas and classes, "choose a creature type", replacement effects (Doubling Season, etc.), protection, damage division, and modal triggered abilities. Cards that need these are marked as described above. Bots are heuristic and fairly weak.
 
 Card images are loaded from Scryfall. This is unofficial fan content permitted under the Wizards of the Coast Fan Content Policy; it is not approved or endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC.

@@ -104,6 +104,8 @@ export interface Ctx {
   scry(player: PlayerId, n: number, then?: string): void;
   surveil(player: PlayerId, n: number, then?: string): void;
   proliferate(): void;
+  /** Turn a transforming double-faced permanent to its other face. */
+  transform(card: CardId): void;
   /** Ask `player` to pay `cost`; if they don't (or can't), run def.handlers[failKey]. */
   unlessPays(player: PlayerId, cost: string, failKey: string, data?: any): void;
   /** Copy a spell on the stack (same targets). */
@@ -261,8 +263,10 @@ export interface CardDef {
   modeCount?: number;
   /** Starting loyalty for planeswalkers. */
   loyalty?: number;
-  /** Modal double-faced card: the back face (a land or spell), by name. */
+  /** Double-faced card: the other face, by name (modal: playable land face; transform: what it turns into). */
   backFace?: string;
+  /** This definition is the back face of a transforming card (can't be cast or put in a deck by itself). */
+  isBackFace?: boolean;
   /** "You may have this enter as a copy of any <kind> on the battlefield." */
   cloneOf?: 'creature' | 'artifact' | 'permanent';
   /** "enters with N counters on it" (n 'X' = the X paid). */

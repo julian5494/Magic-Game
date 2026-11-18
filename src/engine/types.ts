@@ -268,6 +268,8 @@ export interface GameState {
   startingLife: number;
   /** Spells cast this turn (for storm). */
   spellsThisTurn?: number;
+  /** Spells cast during the previous turn (werewolves). */
+  spellsLastTurn?: number;
   /** The monarch draws an extra card at their end step; dealing combat damage to them steals it. */
   monarch?: PlayerId | null;
 }
