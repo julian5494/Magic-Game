@@ -205,7 +205,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     legal: me ? legalActions(state, you) : [],
     passes: [...state.passes],
     canPass: state.phase === 'playing' && state.priority === you && state.decisions.length === 0,
-    log: state.log.slice(-150),
+    log: state.log.slice(-400),
     winner: state.winner,
   };
 }

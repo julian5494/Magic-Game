@@ -47,7 +47,7 @@ export function newId(state: GameState, prefix: string): string {
 
 export function log(state: GameState, text: string): void {
   state.log.push({ turn: state.turn, text });
-  if (state.log.length > 400) state.log.splice(0, state.log.length - 400);
+  if (state.log.length > 1000) state.log.splice(0, state.log.length - 1000);
 }
 
 export function defOf(card: CardInstance | Snapshot): CardDef {

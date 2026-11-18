@@ -277,3 +277,72 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .cov-list { max-height: 220px; overflow: auto; padding-left: 18px; color: #c8d2e8; }
 .blocked-text { color: #ff9a9e; }
 .settings select { font-size: 12px; padding: 2px 6px; }
+
+/* ---------- Focus layout ---------- */
+.game.focus-opp { grid-template-rows: minmax(170px, 1.6fr) auto minmax(130px, 0.9fr) 210px; }
+.game.focus-me { grid-template-rows: minmax(120px, 0.8fr) auto minmax(170px, 1.5fr) 210px; }
+.opp-area { transition: flex 0.2s; }
+.opp-area.focused { flex: 2.6; background: #ffffff0b; box-shadow: 0 0 0 1px #f2b33d33 inset; }
+.focus-btn { margin-left: 6px; font-size: 13px; color: var(--muted); }
+.focus-btn.on { color: var(--accent); }
+.middle { justify-content: space-between; }
+.focus-select { font-size: 12px; color: var(--muted); }
+.focus-select select { font-size: 12px; padding: 2px 6px; }
+
+/* ---------- Drag & drop ---------- */
+.card[draggable='true'] { cursor: grab; }
+.game.dragging .card[draggable='true'] { cursor: grabbing; }
+.card.drop-ok { box-shadow: 0 0 0 3px var(--ok), 0 0 18px var(--ok); }
+.drop-zone { outline: 2px dashed var(--ok); outline-offset: -4px; }
+.me-area { position: relative; }
+.drop-hint { position: absolute; inset: 0; display: grid; place-items: center; font-size: 18px; color: var(--ok); pointer-events: none; z-index: 2; text-shadow: 0 2px 8px #000; }
+.player-panel.selectable { cursor: pointer; }
+
+/* ---------- Arrows ---------- */
+.arrow-layer { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 40; }
+.arrow { stroke-width: 4; stroke-linecap: round; opacity: 0.9; filter: drop-shadow(0 0 3px #000); }
+.arrow.pending { stroke-dasharray: 8 7; }
+.arrow-attack { stroke: var(--danger); }
+.arrow-block { stroke: var(--accent2); }
+.arrow-target { stroke: var(--accent); }
+.head-attack { fill: var(--danger); }
+.head-block { fill: var(--accent2); }
+.head-target { fill: var(--accent); }
+
+/* ---------- Stack ---------- */
+.stack-float {
+  position: fixed; left: 10px; top: 28%; z-index: 30; width: 270px; max-height: 60vh; overflow: auto;
+  background: #10172aee; border: 1px solid #4a5b80; border-radius: 12px; padding: 8px; box-shadow: 0 10px 30px #000a;
+}
+.stack-float.collapsed { width: auto; }
+.stack-head { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.stack-cards { display: flex; flex-direction: column; gap: 8px; }
+.stack-entry { display: flex; gap: 8px; align-items: flex-start; padding: 4px; border-radius: 8px; border: 1px solid transparent; }
+.stack-entry.top { background: #f2b33d14; border-color: #f2b33d55; }
+.stack-entry.selectable { border-color: var(--select); box-shadow: 0 0 8px var(--select); cursor: pointer; }
+.stack-info { min-width: 0; }
+.stack-nocard { width: 72px; height: 100px; border-radius: 7px; background: #333c55; display: grid; place-items: center; font-size: 10px; text-align: center; padding: 4px; }
+.target-line { color: var(--accent); }
+
+/* ---------- Log ---------- */
+.log-tabs { display: flex; gap: 4px; padding: 4px 4px 0; align-items: center; }
+.log-tabs button { padding: 3px 10px; font-size: 12px; border-radius: 6px 6px 0 0; }
+.log-tabs button.active { border-color: var(--accent); color: var(--accent); }
+.log-tabs .expand { margin-left: auto; font-size: 15px; }
+.log-card { color: #ffd98a; text-decoration: underline dotted; cursor: help; }
+.log-play { color: #e8ecf4; }
+.log-hit { color: #ffb1b1; }
+.log.expanded { position: fixed; right: 12px; top: 12px; bottom: 12px; width: min(560px, 92vw); z-index: 60; box-shadow: 0 10px 40px #000; border: 1px solid #44557a; }
+.log.expanded .log-lines { font-size: 13px; }
+
+/* Settings live in a popover so the log gets the space. */
+.bottom-right { position: relative; }
+.buttons .gear { margin-right: auto; font-size: 15px; }
+.settings { display: none; }
+.settings.open {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  position: absolute; bottom: 100%; right: 0; margin-bottom: 8px; z-index: 55;
+  background: var(--panel); border: 1px solid #44557a; border-radius: 10px; padding: 12px; box-shadow: 0 10px 30px #000a;
+}
+.stack-float { left: auto; right: 10px; }
+.stack-float { top: 70px; max-height: calc(100vh - 300px); }

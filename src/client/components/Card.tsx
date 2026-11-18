@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type HTMLAttributes, type ReactNode } from 'react';
 import type { CardView } from '../../engine/view';
 
 export const IMAGES_KEY = 'commander-arena-images';
@@ -53,9 +53,12 @@ export interface CardProps {
   onClick?: () => void;
   onHover?: (c: CardView | null) => void;
   showTapped?: boolean;
+  /** Extra DOM props (drag & drop, double-click). */
+  extra?: HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
+  dropOk?: boolean;
 }
 
-export function Card({ card, size = 'medium', selectable, selected, attacking, blocking, dim, badge, onClick, onHover, showTapped = true }: CardProps) {
+export function Card({ card, size = 'medium', selectable, selected, attacking, blocking, dim, badge, onClick, onHover, showTapped = true, extra, dropOk }: CardProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const useImage = imagesEnabled() && !card.token && !imgFailed;
   const src = card.image ?? imageUrl(card.name);
@@ -71,15 +74,18 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
     attacking ? 'attacking' : '',
     blocking ? 'blocking' : '',
     dim ? 'dim' : '',
+    dropOk ? 'drop-ok' : '',
   ].join(' ');
   const counters = Object.entries(card.counters).filter(([, n]) => n > 0);
   return (
     <div
       className={cls}
+      data-card-id={card.id}
       onClick={onClick}
       onMouseEnter={() => onHover?.(card)}
       onMouseLeave={() => onHover?.(null)}
       title={size === 'tiny' ? card.name : undefined}
+      {...extra}
     >
       {useImage ? (
         <img className="card-img" src={src} alt={card.name} loading="lazy" onError={() => setImgFailed(true)} draggable={false} />

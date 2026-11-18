@@ -80,6 +80,7 @@ export function moveCard(
   const card = state.cards[id];
   if (!card) return;
   const from = card.zone;
+  if (!opts.silent && state.phase === 'playing') logMove(state, card, from, to);
   if (from === 'battlefield') {
     const snap = snapshot(state, card);
     state.battlefield = state.battlefield.filter((x) => x !== id);
@@ -187,16 +188,37 @@ export function moveCard(
   }
 }
 
+function logMove(state: GameState, card: CardInstance, from: ZoneName, to: ZoneName): void {
+  const name = card.def;
+  const isCreature = hasType(card, 'Creature');
+  let text: string | null = null;
+  if (from === 'battlefield') {
+    if (to === 'graveyard') text = isCreature ? `${name} dies.` : `${name} is put into the graveyard.`;
+    else if (to === 'exile') text = `${name} is exiled.`;
+    else if (to === 'hand') text = `${name} returns to its owner's hand.`;
+    else if (to === 'library') text = `${name} is put into its owner's library.`;
+  } else if (to === 'exile' && (from === 'graveyard' || from === 'library' || from === 'hand')) {
+    text = `${name} is exiled from ${from === 'graveyard' ? 'a graveyard' : from === 'library' ? 'the top of a library' : 'a hand'}.`;
+  } else if (from === 'library' && to === 'graveyard') text = `${name} is milled.`;
+  else if (from === 'graveyard' && to === 'hand') text = `${name} returns from the graveyard to its owner's hand.`;
+  else if (to === 'battlefield' && (from === 'graveyard' || from === 'exile')) text = `${name} returns to the battlefield.`;
+  if (text) log(state, text);
+}
+
 export function drawCards(state: GameState, pid: PlayerId, n: number): void {
   const p = getPlayer(state, pid);
+  let drawn = 0;
   for (let i = 0; i < n; i++) {
     if (p.library.length === 0) {
       p.drewFromEmpty = true;
-      return;
+      break;
     }
     moveCard(state, p.library[0], 'hand');
     pushEvent(state, { t: 'draw', player: pid });
+    drawn++;
   }
+  if (drawn && state.phase === 'playing') log(state, `${p.name} draws ${drawn} card${drawn > 1 ? 's' : ''}.`);
+  if (p.drewFromEmpty) log(state, `${p.name} tried to draw from an empty library.`);
 }
 
 export function gainLife(state: GameState, pid: PlayerId, n: number): void {
@@ -205,6 +227,7 @@ export function gainLife(state: GameState, pid: PlayerId, n: number): void {
   if (p.lost) return;
   p.life += n;
   p.lifeGainedThisTurn += n;
+  log(state, `${p.name} gains ${n} life (${p.life}).`);
   pushEvent(state, { t: 'gainLife', player: pid, amount: n });
 }
 
@@ -212,6 +235,7 @@ export function loseLife(state: GameState, pid: PlayerId, n: number): void {
   if (n <= 0) return;
   const p = getPlayer(state, pid);
   p.life -= n;
+  log(state, `${p.name} loses ${n} life (${p.life}).`);
 }
 
 export function dealDamage(
@@ -227,6 +251,10 @@ export function dealDamage(
   const live = state.cards[source.id];
   const kws: Keyword[] = live && live.zone === 'battlefield' ? getKeywords(state, live) : defOf(source).keywords ?? [];
   const controller = live ? live.controller : source.controller;
+  if (!combat) {
+    const what = t.type === 'player' ? getPlayer(state, t.id).name : state.cards[t.id]?.def;
+    if (what) log(state, `${source.def} deals ${amount} damage to ${what}.`);
+  }
   if (t.type === 'player') {
     const p = getPlayer(state, t.id);
     if (p.lost) return;
@@ -285,6 +313,7 @@ export function createToken(state: GameState, pid: PlayerId, defName: string, n 
     moveCard(state, card.id, 'battlefield', { controller: pid });
     out.push(card);
   }
+  if (n > 0 && state.phase === 'playing') log(state, `${getPlayer(state, pid).name} creates ${n === 1 ? 'a' : n} ${defName}${n > 1 ? 's' : ''}.`);
   return out;
 }
 

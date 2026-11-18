@@ -264,6 +264,7 @@ export function putTriggerOnStack(state: GameState, trig: PendingTrigger, target
   };
   state.stack.push(item);
   state.passes = [];
+  log(state, `${trig.def}'s ability triggers: ${t.text}`);
 }
 
 function processPendingTrigger(state: GameState): void {
@@ -409,6 +410,7 @@ export function resolveTop(state: GameState): void {
     });
     return;
   }
+  log(state, `${def.name}'s ability resolves.`);
   ability.effect?.(makeCtx(state, init));
 }
 

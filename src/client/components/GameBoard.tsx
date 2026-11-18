@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, Target, TargetSpecView } from '../../engine/types';
 import type { CardView, GameView, StackView } from '../../engine/view';
 import type { ClientMessage } from '../../shared/protocol';
@@ -22,6 +22,20 @@ interface Menu {
 
 const sameTarget = (a: Target, b: Target) => a.type === b.type && a.id === b.id;
 
+const CLICK_KEY = 'commander-arena-click-to-play';
+function readClickToPlay(): boolean {
+  try {
+    return localStorage.getItem(CLICK_KEY) === 'on';
+  } catch {
+    return false;
+  }
+}
+
+type DragKind = 'hand' | 'attacker' | 'blocker';
+/** Where something can be dropped: a card, a player, or a board area. */
+type DropTarget = { type: 'card'; id: CardId } | { type: 'player'; id: PlayerId } | { type: 'area'; owner: PlayerId };
+type Extra = HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
+
 export function GameBoard({ view, net, send }: { view: GameView; net: NetState; send: (m: ClientMessage) => void }) {
   const [hover, setHover] = useState<CardView | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -34,9 +48,15 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [trigTargets, setTrigTargets] = useState<(Target | null)[]>([]);
   const [, forceRender] = useState(0);
   const [hold, setHold] = useState(false);
+  const [drag, setDrag] = useState<{ id: CardId; kind: DragKind } | null>(null);
+  const [focus, setFocus] = useState<'auto' | PlayerId>('auto');
+  const [clickToPlay, setClickToPlay] = useState(readClickToPlay);
+  const [selectedHand, setSelectedHand] = useState<CardId | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   const act = useCallback((action: Action) => send({ t: 'action', action }), [send]);
   const decision = view.decision;
+  const myDecisionNow = decision && decision.player === view.you ? decision : null;
   const me = view.players.find((p) => p.id === view.you)!;
 
   // Opponents in turn order starting after me.
@@ -175,7 +195,87 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       }
       return;
     }
+    if (isInHand(id) && !clickToPlay) {
+      // Cards in hand are played by double-clicking or dragging them onto the battlefield.
+      setSelectedHand(selectedHand === id ? null : id);
+      return;
+    }
     openMenu(id);
+  };
+
+  const isInHand = (id: CardId) => view.hand.includes(id) || me.command.includes(id);
+
+  // ---------- Drag & drop ----------
+  const dragKindFor = (id: CardId): DragKind | null => {
+    if (targeting || sacrificing || pending) return null;
+    if (myDecisionNow?.kind === 'declareAttackers') return myDecisionNow.attackers!.includes(id) ? 'attacker' : null;
+    if (myDecisionNow?.kind === 'declareBlockers') return myDecisionNow.blockers!.includes(id) ? 'blocker' : null;
+    if (!decision && isInHand(id) && actionsFor(id).some((a) => a.type !== 'manaTap' && !a.isMana)) return 'hand';
+    return null;
+  };
+
+  /** Single-target spells can be dropped straight onto their target. */
+  const directCast = (id: CardId, t: Target) =>
+    view.legal.find(
+      (a) => a.cardId === id && a.type === 'cast' && a.targets.length === 1 && a.xMax === undefined && !a.sacrificeOptions && a.targets[0].options.some((o) => sameTarget(o, t)),
+    );
+
+  const canDrop = (t: DropTarget): boolean => {
+    if (!drag) return false;
+    if (drag.kind === 'hand') {
+      if (t.type === 'area') return t.owner === view.you;
+      return !!directCast(drag.id, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id });
+    }
+    if (drag.kind === 'attacker' && myDecisionNow?.kind === 'declareAttackers') {
+      if (t.type === 'player') return myDecisionNow.defenders!.includes(t.id);
+      if (t.type === 'card') return !!myDecisionNow.planeswalkers?.includes(t.id);
+      return t.owner === view.you || myDecisionNow.defenders!.includes(t.owner);
+    }
+    if (drag.kind === 'blocker' && myDecisionNow?.kind === 'declareBlockers') {
+      if (t.type === 'card') return myDecisionNow.attacking!.includes(t.id);
+      return t.type === 'area' && t.owner === view.you;
+    }
+    return false;
+  };
+
+  const handleDrop = (t: DropTarget) => {
+    const d = drag;
+    setDrag(null);
+    if (!d || !canDrop(t)) return;
+    if (d.kind === 'hand') {
+      if (t.type !== 'area') {
+        const a = directCast(d.id, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id })!;
+        const full = a.targets[0].options.find((o) => sameTarget(o, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id }))!;
+        act({ type: 'cast', cardId: d.id, targets: [full], modes: a.modes, variant: a.variant, hold });
+      } else openMenu(d.id);
+      return;
+    }
+    if (d.kind === 'attacker') {
+      const next = { ...attacks };
+      if (t.type === 'area' && t.owner === view.you) delete next[d.id];
+      else next[d.id] = t.type === 'area' ? t.owner : t.id;
+      setAttacks(next);
+      return;
+    }
+    const next = { ...blocks };
+    if (t.type === 'card') next[d.id] = t.id;
+    else delete next[d.id];
+    setBlocks(next);
+  };
+
+  const dropProps = (t: DropTarget): Extra => {
+    if (!drag || !canDrop(t)) return {};
+    return {
+      onDragOver: (e: DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+      },
+      onDrop: (e: DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDrop(t);
+      },
+    };
   };
 
   const onPlayerClick = (pid: PlayerId) => {
@@ -229,7 +329,28 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         badge = `🛡${attackerIndex.get(blocks[id])}`;
       }
     }
-    return { card: c, selectable, selected, attacking, blocking, badge };
+    const extra: Extra = { ...dropProps({ type: 'card', id }) };
+    const dropOk = !!drag && drag.id !== id && canDrop({ type: 'card', id });
+    const kind = dragKindFor(id);
+    if (kind) {
+      extra.draggable = true;
+      extra.onDragStart = (e: DragEvent) => {
+        e.dataTransfer.setData('text/plain', id);
+        e.dataTransfer.effectAllowed = 'move';
+        setHover(null);
+        setDrag({ id, kind });
+      };
+      extra.onDragEnd = () => setDrag(null);
+    }
+    if (isInHand(id)) {
+      extra.onDoubleClick = () => {
+        setSelectedHand(null);
+        if (!decision && !targeting && !pending) openMenu(id);
+      };
+      if (selectedHand === id) selected = true;
+    }
+    if (drag?.id === id) selected = true;
+    return { card: c, selectable: selectable || dropOk, selected, attacking, blocking, badge, extra, dropOk };
   };
 
   // ---------- Prompt & buttons ----------
@@ -253,6 +374,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       : myDecision.planeswalkers?.length
         ? `Click creatures to attack. Click a planeswalker to attack it instead (now: ${attackTarget ? view.cards[attackTarget]?.name ?? nameOfPlayer(view, attackTarget) : '—'}).`
         : 'Click creatures to attack.';
+    prompt += ' Or drag a creature onto the opponent or planeswalker it should attack.';
     buttons.push({
       label: 'All attack',
       run: () => setAttacks(Object.fromEntries(myDecision.attackers!.map((id) => [id, attacks[id] ?? attackTarget ?? myDecision.defenders![0]]))),
@@ -273,7 +395,9 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     });
   } else if (myDecision?.kind === 'declareBlockers') {
     const n = Object.keys(blocks).length;
-    prompt = selBlocker ? `Now click the attacker for ${view.cards[selBlocker]?.name} to block.` : 'Click one of your creatures, then the attacker it should block.';
+    prompt = selBlocker
+      ? `Now click the attacker for ${view.cards[selBlocker]?.name} to block.`
+      : 'Drag your creatures onto the attackers they should block (or click a creature, then the attacker).';
     if (n) buttons.push({ label: 'Clear', run: () => setBlocks({}) });
     buttons.push({
       label: n ? `Confirm ${n} block${n > 1 ? 's' : ''}` : 'No blocks',
@@ -283,7 +407,9 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   } else if (view.canPass) {
     const myTurn = view.activePlayer === view.you;
     if (view.stack.length) prompt = `${view.stack[view.stack.length - 1].name} is on the stack. Respond or let it resolve.`;
-    else if (myTurn && view.step === 'main1') prompt = 'Your main phase. Play a land or cast spells.';
+    else if (myTurn && view.step === 'main1') {
+      prompt = clickToPlay ? 'Your main phase. Click cards to play them.' : 'Your main phase. Double-click a card or drag it onto the battlefield to play it.';
+    }
     else if (myTurn && view.step === 'main2') prompt = 'Second main phase.';
     else prompt = `${STEP_LABELS[view.step]} — you may cast instants.`;
     const label = view.stack.length ? 'Resolve' : myTurn && view.step === 'main1' ? 'To combat' : myTurn && view.step === 'main2' ? 'End turn' : 'Pass';
@@ -309,32 +435,88 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const modalDecision = myDecision && ['chooseCards', 'chooseOption', 'mulligan'].includes(myDecision.kind) ? myDecision : null;
   const meView = view.players.find((p) => p.id === view.you)!;
 
+  // Arrows: attacks, blocks and what spells/abilities on the stack target.
+  const arrows: Arrow[] = [];
+  const toSel = (t: Target | string) =>
+    typeof t === 'string'
+      ? view.cards[t]
+        ? `[data-card-id="${t}"]`
+        : `[data-player-id="${t}"]`
+      : t.type === 'player'
+        ? `[data-player-id="${t.id}"]`
+        : t.type === 'card'
+          ? `[data-card-id="${t.id}"]`
+          : `[data-stack-id="${t.id}"]`;
+  if (myDecision?.kind === 'declareAttackers') {
+    for (const [id, t] of Object.entries(attacks)) arrows.push({ from: `[data-card-id="${id}"]`, to: toSel(t), kind: 'attack', pending: true });
+  }
+  for (const a of view.combat?.attackers ?? []) {
+    arrows.push({ from: `[data-card-id="${a.id}"]`, to: toSel(a.planeswalker ?? a.defender), kind: 'attack' });
+    for (const b of a.blockedBy) arrows.push({ from: `[data-card-id="${b}"]`, to: `[data-card-id="${a.id}"]`, kind: 'block' });
+  }
+  if (myDecision?.kind === 'declareBlockers') {
+    for (const [b, a] of Object.entries(blocks)) arrows.push({ from: `[data-card-id="${b}"]`, to: `[data-card-id="${a}"]`, kind: 'block', pending: true });
+  }
+  for (const s of view.stack) {
+    for (const t of s.targets) if (t) arrows.push({ from: `[data-stack-id="${s.id}"]`, to: toSel(t), kind: 'target' });
+  }
+
+  // Which board is shown big: the active player's by default, or one the player pinned.
+  const focusId = focus === 'auto' || view.players.find((p) => p.id === focus)?.lost ? view.activePlayer : focus;
+  const focusOnMe = focusId === view.you;
+  const toggleFocus = (pid: PlayerId) => setFocus(focus === pid ? 'auto' : pid);
+
   return (
-    <div className="game" onClick={() => setMenu(null)}>
+    <div className={`game ${focusOnMe ? 'focus-me' : 'focus-opp'} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)}>
       <div className="opponents">
-        {opponents.map((p) => (
-          <div key={p.id} className="opp-area">
-            <PlayerPanel
-              p={p}
-              view={view}
-              selectable={!!targeting && isTargetable({ type: 'player', id: p.id })}
-              attackTarget={myDecision?.kind === 'declareAttackers' && attackTarget === p.id}
-              onClick={() => onPlayerClick(p.id)}
-              onZone={setZone}
-              onHover={setHover}
-            />
-            <Battlefield view={view} owner={p.id} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} compact={opponents.length > 1} />
-          </div>
-        ))}
+        {opponents.map((p) => {
+          const big = !focusOnMe && focusId === p.id;
+          const areaDrop = dropProps({ type: 'area', owner: p.id });
+          return (
+            <div
+              key={p.id}
+              className={`opp-area ${big ? 'focused' : ''} ${drag && canDrop({ type: 'area', owner: p.id }) ? 'drop-zone' : ''}`}
+              {...areaDrop}
+            >
+              <PlayerPanel
+                p={p}
+                view={view}
+                selectable={(!!targeting && isTargetable({ type: 'player', id: p.id })) || (!!drag && canDrop({ type: 'player', id: p.id }))}
+                attackTarget={myDecision?.kind === 'declareAttackers' && attackTarget === p.id}
+                onClick={() => onPlayerClick(p.id)}
+                onZone={setZone}
+                onHover={setHover}
+                extra={dropProps({ type: 'player', id: p.id })}
+                focused={focusId === p.id}
+                onFocus={() => toggleFocus(p.id)}
+              />
+              <Battlefield view={view} owner={p.id} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} compact={!big && (opponents.length > 1 || focusOnMe)} />
+            </div>
+          );
+        })}
       </div>
 
       <div className="middle">
         <PhaseTracker view={view} />
-        <StackPanel view={view} selectable={isTargetable} onClick={onStackClick} onHover={setHover} />
+        <label className="focus-select" title="Which player's board is shown big">
+          Big board:{' '}
+          <select value={focus} onChange={(e) => setFocus(e.target.value)}>
+            <option value="auto">Follow the turn</option>
+            {view.players
+              .filter((p) => !p.lost)
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.id === view.you ? 'Mine' : p.name}
+                </option>
+              ))}
+          </select>
+        </label>
       </div>
+      <StackPanel view={view} selectable={isTargetable} onClick={onStackClick} onHover={setHover} />
 
-      <div className="me-area">
-        <Battlefield view={view} owner={view.you} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} />
+      <div className={`me-area ${drag && canDrop({ type: 'area', owner: view.you }) ? 'drop-zone' : ''}`} {...dropProps({ type: 'area', owner: view.you })}>
+        {drag?.kind === 'hand' && <div className="drop-hint">Drop here to play {view.cards[drag.id]?.name}</div>}
+        <Battlefield view={view} owner={view.you} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} compact={!focusOnMe} />
       </div>
 
       <div className="bottom">
@@ -343,11 +525,14 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
             p={meView}
             view={view}
             isMe
-            selectable={!!targeting && isTargetable({ type: 'player', id: view.you })}
+            selectable={(!!targeting && isTargetable({ type: 'player', id: view.you })) || (!!drag && canDrop({ type: 'player', id: view.you }))}
             attackTarget={false}
             onClick={() => onPlayerClick(view.you)}
             onZone={setZone}
             onHover={setHover}
+            extra={dropProps({ type: 'player', id: view.you })}
+            focused={focusOnMe}
+            onFocus={() => toggleFocus(view.you)}
           />
           <div className="command-zone">
             {me.command.map((id) => {
@@ -365,13 +550,16 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         <div className="bottom-right">
           <div className="prompt">{prompt}</div>
           <div className="buttons">
+            <button className="small gear" title="Settings" onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}>
+              ⚙
+            </button>
             {buttons.map((b) => (
               <button key={b.label} className={b.primary ? 'primary big-btn' : ''} disabled={b.disabled} onClick={(e) => { e.stopPropagation(); b.run(); }}>
                 {b.label}
               </button>
             ))}
           </div>
-          <div className="settings">
+          <div className={`settings ${showSettings ? 'open' : ''}`} onClick={(e) => e.stopPropagation()}>
             <label title="When the game should stop and give you priority">
               Stops:{' '}
               <select value={meView.autoPass} onChange={(e) => act({ type: 'setAutoPass', mode: e.target.value as AutoPassMode })}>
@@ -398,15 +586,32 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               />{' '}
               Card images
             </label>
+            <label title="Off: double-click or drag cards from your hand to play them. On: a single click plays them.">
+              <input
+                type="checkbox"
+                checked={clickToPlay}
+                onChange={(e) => {
+                  setClickToPlay(e.target.checked);
+                  try {
+                    localStorage.setItem(CLICK_KEY, e.target.checked ? 'on' : 'off');
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+              />{' '}
+              Single-click plays cards
+            </label>
             <button className="small" onClick={() => confirm('Concede this game?') && act({ type: 'concede' })}>
               Concede
             </button>
           </div>
-          <LogPanel log={view.log} chat={net.chat} onChat={(text) => send({ t: 'chat', text })} />
+          <LogPanel log={view.log} chat={net.chat} onChat={(text) => send({ t: 'chat', text })} view={view} onHover={setHover} />
         </div>
       </div>
 
-      {hover && (
+      <ArrowLayer arrows={arrows} />
+
+      {hover && !drag && (
         <div className="preview-wrap">
           <CardPreview card={hover} />
         </div>
@@ -468,6 +673,81 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 }
 
+// ---------- Arrows ----------
+
+interface Arrow {
+  from: string;
+  to: string;
+  kind: 'attack' | 'block' | 'target';
+  pending?: boolean;
+}
+
+/** Draws arrows between on-screen elements (re-measured as the layout changes). */
+function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
+  const [lines, setLines] = useState<{ x1: number; y1: number; x2: number; y2: number; kind: string; pending?: boolean }[]>([]);
+  const key = JSON.stringify(arrows);
+  const last = useRef('');
+  const measure = useCallback(() => {
+    const center = (sel: string) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    };
+    const next = (JSON.parse(key) as Arrow[])
+      .map((a) => {
+        const p = center(a.from);
+        const q = center(a.to);
+        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending } : null;
+      })
+      .filter(Boolean) as typeof lines;
+    const sig = JSON.stringify(next.map((l) => [Math.round(l.x1), Math.round(l.y1), Math.round(l.x2), Math.round(l.y2), l.kind]));
+    if (sig !== last.current) {
+      last.current = sig;
+      setLines(next);
+    }
+  }, [key]);
+  useLayoutEffect(measure);
+  useEffect(() => {
+    const t = setInterval(measure, 400);
+    window.addEventListener('resize', measure);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('resize', measure);
+    };
+  }, [measure]);
+  if (!lines.length) return null;
+  return (
+    <svg className="arrow-layer">
+      <defs>
+        {['attack', 'block', 'target'].map((k) => (
+          <marker key={k} id={`head-${k}`} markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" className={`head-${k}`} />
+          </marker>
+        ))}
+      </defs>
+      {lines.map((l, i) => {
+        // Stop short of the target's centre so the arrowhead stays visible.
+        const dx = l.x2 - l.x1;
+        const dy = l.y2 - l.y1;
+        const len = Math.hypot(dx, dy) || 1;
+        const shorten = Math.min(30, len / 3);
+        return (
+          <line
+            key={i}
+            x1={l.x1}
+            y1={l.y1}
+            x2={l.x2 - (dx / len) * shorten}
+            y2={l.y2 - (dy / len) * shorten}
+            className={`arrow arrow-${l.kind} ${l.pending ? 'pending' : ''}`}
+            markerEnd={`url(#head-${l.kind})`}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 // ---------- Battlefield ----------
 
 type CardPropsFn = (id: CardId) => {
@@ -477,6 +757,8 @@ type CardPropsFn = (id: CardId) => {
   attacking: boolean;
   blocking: boolean;
   badge?: string;
+  extra?: Extra;
+  dropOk?: boolean;
 };
 
 function Battlefield({

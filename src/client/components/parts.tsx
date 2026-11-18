@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react';
 import type { CardId, Decision, LogEntry, PlayerId, Step, Target } from '../../engine/types';
 import type { CardView, GameView, PlayerView, StackView } from '../../engine/view';
 import type { ChatLine } from '../net';
@@ -52,6 +52,9 @@ export function PlayerPanel({
   onZone,
   onHover,
   isMe,
+  extra,
+  focused,
+  onFocus,
 }: {
   p: PlayerView;
   view: GameView;
@@ -61,6 +64,9 @@ export function PlayerPanel({
   onZone: (z: ZoneOpen) => void;
   onHover: (c: CardView | null) => void;
   isMe?: boolean;
+  extra?: HTMLAttributes<HTMLDivElement>;
+  focused?: boolean;
+  onFocus?: () => void;
 }) {
   const active = view.activePlayer === p.id;
   const waiting = view.waitingOn.includes(p.id);
@@ -69,13 +75,27 @@ export function PlayerPanel({
   return (
     <div
       className={`player-panel ${active ? 'active' : ''} ${waiting ? 'waiting' : ''} ${selectable ? 'selectable' : ''} ${attackTarget ? 'attack-target' : ''} ${p.lost ? 'lost' : ''}`}
+      data-player-id={p.id}
       onClick={onClick}
+      {...extra}
     >
       <div className="pp-top">
         <span className="pp-name">
           {p.name}
           {p.isBot && <span className="tag">BOT</span>}
           {isMe && <span className="tag">YOU</span>}
+          {onFocus && (
+            <button
+              className={`link focus-btn ${focused ? 'on' : ''}`}
+              title={focused ? 'This board is shown big' : 'Show this board big'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onFocus();
+              }}
+            >
+              ⛶
+            </button>
+          )}
         </span>
         {view.stack.length > 0 && !p.lost && (
           <span className={`pass-chip ${passed ? 'passed' : waiting ? 'deciding' : ''}`} title="Priority">
@@ -146,6 +166,7 @@ export function StackPanel({
   onClick: (item: StackView) => void;
   onHover: (c: CardView | null) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   if (!view.stack.length) return null;
   const nameOf = (t: Target | null) => {
     if (!t) return null;
@@ -153,63 +174,139 @@ export function StackPanel({
     if (t.type === 'card') return view.cards[t.id]?.name ?? 'a card';
     return view.stack.find((s) => s.id === t.id)?.name ?? 'a spell';
   };
+  const items = [...view.stack].reverse(); // top of the stack first
   return (
-    <div className="stack">
-      <div className="stack-title">Stack</div>
-      {[...view.stack].reverse().map((s) => {
-        const card = view.cards[s.cardId];
-        const sel = selectable({ type: 'stack', id: s.id });
-        const targets = s.targets.map(nameOf).filter(Boolean);
-        return (
-          <div key={s.id} className={`stack-item ${sel ? 'selectable' : ''}`} onClick={() => onClick(s)} onMouseEnter={() => card && onHover(card)} onMouseLeave={() => onHover(null)}>
-            <div className="stack-name">
-              {s.kind === 'spell' ? '' : '⚡ '}
-              {s.name}
-              <span className="muted"> — {view.players.find((p) => p.id === s.controller)?.name}</span>
-            </div>
-            {s.kind !== 'spell' && <div className="stack-text">{s.text}</div>}
-            {targets.length > 0 && <div className="stack-text">→ {targets.join(', ')}</div>}
-          </div>
-        );
-      })}
+    <div className={`stack-float ${collapsed ? 'collapsed' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className="stack-head">
+        <span>Stack ({view.stack.length}) — top resolves first</span>
+        <button className="link" onClick={() => setCollapsed(!collapsed)}>
+          {collapsed ? 'show' : 'hide'}
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="stack-cards">
+          {items.map((s, i) => {
+            const card = view.cards[s.cardId];
+            const sel = selectable({ type: 'stack', id: s.id });
+            const targets = s.targets.map(nameOf).filter(Boolean);
+            const who = view.players.find((p) => p.id === s.controller)?.name;
+            return (
+              <div key={s.id} className={`stack-entry ${i === 0 ? 'top' : ''} ${sel ? 'selectable' : ''}`} data-stack-id={s.id} onClick={() => onClick(s)}>
+                {card ? (
+                  <Card card={card} size={i === 0 ? 'medium' : 'small'} showTapped={false} selectable={sel} onHover={onHover} />
+                ) : (
+                  <div className="stack-nocard">{s.name}</div>
+                )}
+                <div className="stack-info">
+                  <div className="stack-name">
+                    {s.kind === 'spell' ? s.name : `⚡ ${s.name} ability`}
+                  </div>
+                  <div className="stack-text muted">{who}</div>
+                  {s.kind !== 'spell' && <div className="stack-text">{s.text}</div>}
+                  {targets.length > 0 && <div className="stack-text target-line">→ {targets.join(', ')}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
-export function LogPanel({ log, chat, onChat }: { log: LogEntry[]; chat: ChatLine[]; onChat: (t: string) => void }) {
+/** Game log with card names you can hover, a chat tab, and an expanded view. */
+export function LogPanel({
+  log,
+  chat,
+  onChat,
+  view,
+  onHover,
+}: {
+  log: LogEntry[];
+  chat: ChatLine[];
+  onChat: (t: string) => void;
+  view: GameView;
+  onHover: (c: CardView | null) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [text, setText] = useState('');
-  const merged = [...log.map((l, i) => ({ k: `l${i}`, text: l.text, chat: false })), ...chat.map((c, i) => ({ k: `c${i}`, text: `${c.from}: ${c.text}`, chat: true }))];
+  const [tab, setTab] = useState<'log' | 'chat'>('log');
+  const [expanded, setExpanded] = useState(false);
+  const [seenChat, setSeenChat] = useState(0);
   useEffect(() => {
     ref.current?.scrollTo({ top: ref.current.scrollHeight });
-  }, [log.length, chat.length]);
+  }, [log.length, chat.length, tab, expanded]);
+  useEffect(() => {
+    if (tab === 'chat') setSeenChat(chat.length);
+  }, [tab, chat.length]);
+
+  // Card names that appear in the log -> a card we can preview.
+  const byName = useMemo(() => {
+    const m = new Map<string, CardView>();
+    for (const c of Object.values(view.cards)) if (!m.has(c.name)) m.set(c.name, c);
+    return m;
+  }, [view.cards]);
+  const nameRe = useMemo(() => {
+    const names = [...byName.keys()].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return names.length ? new RegExp(`(${names.join('|')})`, 'g') : null;
+  }, [byName]);
+  const rich = (line: string) => {
+    if (!nameRe) return line;
+    return line.split(nameRe).map((part, i) => {
+      const c = byName.get(part);
+      return c ? (
+        <span key={i} className="log-card" onMouseEnter={() => onHover(c)} onMouseLeave={() => onHover(null)}>
+          {part}
+        </span>
+      ) : (
+        <span key={i}>{part}</span>
+      );
+    });
+  };
+  const unread = chat.length - seenChat;
   return (
-    <div className="log">
-      <div className="log-lines" ref={ref}>
-        {log.map((l, i) => (
-          <div key={`l${i}`} className={l.text.startsWith('—') ? 'log-turn' : ''}>
-            {l.text}
-          </div>
-        ))}
-        {chat.map((c, i) => (
-          <div key={`c${i}`} className="log-chat">
-            <strong>{c.from}:</strong> {c.text}
-          </div>
-        ))}
-        {merged.length === 0 && <div className="muted">Game log</div>}
+    <div className={`log ${expanded ? 'expanded' : ''}`}>
+      <div className="log-tabs">
+        <button className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>
+          Game log
+        </button>
+        <button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>
+          Chat{unread > 0 && tab !== 'chat' ? ` (${unread})` : ''}
+        </button>
+        <button className="link expand" title={expanded ? 'Shrink' : 'Expand'} onClick={() => setExpanded(!expanded)}>
+          {expanded ? '⤡' : '⤢'}
+        </button>
       </div>
-      <input
-        placeholder="Chat…"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === 'Enter' && text.trim()) {
-            onChat(text);
-            setText('');
-          }
-        }}
-      />
+      <div className="log-lines" ref={ref}>
+        {tab === 'log' &&
+          log.map((l, i) => (
+            <div key={i} className={l.text.startsWith('—') ? 'log-turn' : /casts |activates |plays /.test(l.text) ? 'log-play' : /dies|loses the game|is exiled|deals \d+ (combat )?damage/.test(l.text) ? 'log-hit' : ''}>
+              {rich(l.text)}
+            </div>
+          ))}
+        {tab === 'chat' &&
+          chat.map((c, i) => (
+            <div key={i} className="log-chat">
+              <strong>{c.from}:</strong> {c.text}
+            </div>
+          ))}
+        {tab === 'log' && log.length === 0 && <div className="muted">Nothing has happened yet.</div>}
+        {tab === 'chat' && chat.length === 0 && <div className="muted">No messages yet.</div>}
+      </div>
+      {tab === 'chat' && (
+        <input
+          placeholder="Say something…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && text.trim()) {
+              onChat(text);
+              setText('');
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
