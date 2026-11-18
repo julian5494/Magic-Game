@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
+import { createPortal } from 'react-dom';
+import { useTable3D, useTableSettings, type Quality3D } from '../three/useTable3D';
 import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, Step, Target, TargetSpecView } from '../../engine/types';
 import type { CardView, GameView, PlayerView, StackView } from '../../engine/view';
 import type { ClientMessage } from '../../shared/protocol';
@@ -77,6 +79,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [topPin, setTopPin] = useState<PlayerId | null>(null);
   const [fullBoard, setFullBoard] = useState<PlayerId | null>(null);
   const [calm, setCalm] = useState(() => readFlag(CALM_KEY));
+  const table = useTableSettings();
+  const tableRef = useRef<HTMLDivElement>(null);
+  const { scene: table3d, boardEl } = useTable3D(tableRef, table.quality);
+  const [dieAt, setDieAt] = useState<{ x: number; y: number; r: number } | null>(null);
   const [mats, setMat] = useMats();
   const [clickToPlay, setClickToPlay] = useState(readClickToPlay);
   const [selectedHand, setSelectedHand] = useState<CardId | null>(null);
@@ -450,7 +456,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [handHover, setHandHover] = useState(false);
   // Track the pointer globally: when a card you just played disappears from under the cursor, the hand still tucks away.
   useEffect(() => {
-    const onMove = (e: PointerEvent) => setHandHover(!!(e.target as Element | null)?.closest?.('.hand-fan'));
+    const onMove = (e: PointerEvent) => setHandHover(!!(e.target as Element | null)?.closest?.('.hand-fan, .my-die3d'));
     window.addEventListener('pointermove', onMove);
     return () => window.removeEventListener('pointermove', onMove);
   }, []);
@@ -553,9 +559,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     />
   );
 
-  const die = (p: PlayerView, size: number) => (
+  const die = (p: PlayerView, size: number, ghost = false) => (
     <D20
       p={p}
+      ghost={ghost}
       color={colorOf(p.id)}
       size={size}
       after={lifeAfter(p.id)}
@@ -625,27 +632,52 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const fullP = fullBoard ? view.players.find((p) => p.id === fullBoard) : null;
   const logNew = view.log.length > logSeen;
 
-  return (
-    <div className={`tavern ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)}>
-      <div className="stage">
-        <div className={`plane ${topActive ? 'far-big' : 'near-big'}`}>
-          <div className="lightpool" />
-          {topP && mat(topP, 'far', topActive ? 'full' : 'tile', topActive)}
-          <div className="rail">
-            {RAIL.map((s) => {
-              const here = buttons.filter((b) => b.at === s);
-              return (
-                <span key={s} className={`step ${s === curStep ? 'on' : ''}`}>
-                  {STEP_LABELS[s]}
-                  {here.length > 0 && <span className="go">{here.map(btn)}</span>}
-                </span>
-              );
-            })}
-            <span className="rail-tail">{buttons.filter((b) => b.at === 'tail').map(btn)}</span>
+  // Keep the 3D table in step with the game.
+  useEffect(() => {
+    if (!table3d) return;
+    table3d.onLayout = setDieAt;
+    table3d.setInsets({ top: 64, bottom: 128, left: 46, right: 86 });
+    return () => {
+      table3d.onLayout = null;
+    };
+  }, [table3d]);
+  useEffect(() => table3d?.setLife(me.life), [table3d, me.life]);
+  useEffect(() => table3d?.setDieColor(parseInt(colorOf(me.id).slice(1), 16)), [table3d, me.id]);
+  useEffect(() => table3d?.setPropSet(table.propSet), [table3d, table.propSet]);
+  useEffect(() => table3d?.setCalm(calm), [table3d, calm]);
+  const cmdKey = me.commanderDamage.map((d) => `${d.commander}:${d.amount}`).join('|');
+  useEffect(() => {
+    table3d?.setCommanderDamage(
+      me.commanderDamage.map((d) => ({ amount: d.amount, color: parseInt(colorOf(view.cards[d.commander]?.owner ?? '').slice(1), 16) || 0x9b6cff })),
+    );
+  }, [table3d, cmdKey]);
+  useEffect(() => table3d?.setMonarch(view.monarch === view.you ? 'me' : view.monarch && view.monarch === topP?.id ? 'across' : null), [table3d, view.monarch, topP?.id]);
+
+  // The table surface: drawn flat in CSS, or laid on the 3D tavern table when it's running.
+  const planeEl = (
+    <div className={`plane ${topActive ? 'far-big' : 'near-big'}`}>
+            <div className="lightpool" />
+            {topP && mat(topP, 'far', topActive ? 'full' : 'tile', topActive)}
+            <div className="rail">
+              {RAIL.map((s) => {
+                const here = buttons.filter((b) => b.at === s);
+                return (
+                  <span key={s} className={`step ${s === curStep ? 'on' : ''}`}>
+                    {STEP_LABELS[s]}
+                    {here.length > 0 && <span className="go">{here.map(btn)}</span>}
+                  </span>
+                );
+              })}
+              <span className="rail-tail">{buttons.filter((b) => b.at === 'tail').map(btn)}</span>
+            </div>
+            {mat(me, 'near', myTurn ? 'full' : 'tile', !topActive)}
           </div>
-          {mat(me, 'near', myTurn ? 'full' : 'tile', !topActive)}
-        </div>
-      </div>
+  );
+
+  return (
+    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)}>
+      <div className="table3d" ref={tableRef} />
+      {table3d ? createPortal(planeEl, boardEl) : <div className="stage">{planeEl}</div>}
 
       {/* Across the table: who it is, their life, and the seat controls. */}
       {topP && (
@@ -757,11 +789,16 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         </div>
       )}
 
+      {/* With the 3D table your d20 sits in the dice tray; this invisible spot over it takes clicks and drops. */}
+      {table3d && dieAt && (
+        <div className="my-die3d" style={{ left: dieAt.x, top: dieAt.y, width: dieAt.r * 2, height: dieAt.r * 2 }}>
+          {die(me, Math.round(dieAt.r * 2), true)}
+        </div>
+      )}
+
       {/* The table's front edge: your hand fanned around your d20, and your mana. */}
       <div className="hud strip">
-        <div
-          className={`hand-fan ${handOpen ? 'open' : ''}`}
-        >
+        <div className={`hand-fan ${handOpen ? 'open' : ''}`} style={table3d && dieAt ? { left: dieAt.x } : undefined}>
           {view.hand.map((id, i) => {
             const props = cardProps(id);
             const pos = handPos(i);
@@ -777,7 +814,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               )
             );
           })}
-          <div className="my-die">{die(me, 84)}</div>
+          {!table3d && <div className="my-die">{die(me, 84)}</div>}
         </div>
         <div className="me-name">
           {me.name} <CmdDamage p={me} />
@@ -836,6 +873,23 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               />{' '}
               Reduce effects
             </label>
+            <label>
+              3D table{' '}
+              <select value={table.quality} onChange={(e) => table.setQuality(e.target.value as Quality3D)}>
+                <option value="high">High</option>
+                <option value="low">Low (faster)</option>
+                <option value="off">Off (flat table)</option>
+              </select>
+            </label>
+            {table.quality !== 'off' && (
+              <label>
+                Table props{' '}
+                <select value={table.propSet} onChange={(e) => table.setPropSet(e.target.value as 'candle' | 'lantern')}>
+                  <option value="candle">Candle, tankard, leather deck box</option>
+                  <option value="lantern">Lantern, stein, carved deck box</option>
+                </select>
+              </label>
+            )}
             <MatPicker value={matOf(view.you)} onChange={(m) => setMat(view.you, m)} label="My playmat" />
             <button className="tbtn quiet" onClick={() => confirm('Concede this game?') && act({ type: 'concede' })}>
               Concede

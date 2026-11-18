@@ -42,9 +42,12 @@ export function D20({
   active,
   extra,
   onClick,
+  ghost,
 }: {
   p: PlayerView;
   color: string;
+  /** Invisible hit area over the 3D die: keeps the target ring, combat preview and drops. */
+  ghost?: boolean;
   size?: number;
   after?: number;
   selectable?: boolean;
@@ -55,7 +58,7 @@ export function D20({
   const gid = useId().replace(/:/g, '');
   return (
     <div
-      className={`d20 ${active ? 'active' : ''} ${selectable ? 'selectable' : ''} ${p.lost ? 'lost' : ''}`}
+      className={`d20 ${ghost ? 'ghost' : ''} ${active ? 'active' : ''} ${selectable ? 'selectable' : ''} ${p.lost ? 'lost' : ''}`}
       style={{ ['--seat' as string]: color, width: size, height: size }}
       data-player-id={p.id}
       onClick={(e) => {

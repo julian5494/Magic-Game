@@ -667,3 +667,31 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .cmd-slot { align-self: center; }
 .mat.far .mat-piles { gap: 14px; padding-bottom: 10px; }
 .plane.near-big .mat.far .pile-lbl { display: none; }
+
+/* =====================================================================
+   3D tavern (three.js) behind the board
+   ===================================================================== */
+.table3d { position: absolute; inset: 0; z-index: 0; }
+.table3d-canvas { position: absolute; inset: 0; display: block; animation: fade3d .8s ease-out; }
+.table3d-css { position: absolute !important; inset: 0; z-index: 1; }
+@keyframes fade3d { from { opacity: 0; } to { opacity: 1; } }
+/* The board element laid on the 3D table: no wood of its own, no CSS tilt. */
+.board3d { transform-style: preserve-3d; }
+.tavern.three .plane { position: absolute; left: 0; top: 0; bottom: auto; width: 100%; height: 100%; transform: none; background: none; box-shadow: none; border-radius: 0; }
+.tavern.three .lightpool { display: none; }
+.tavern.three .mat::before { box-shadow: 0 3px 4px #000c, 0 10px 24px #0008, inset 0 1px 0 #ffffff1a; }
+/* The front edge of the table is real now: let the 3D table and dice tray show through. */
+.tavern.three .strip { background: none; box-shadow: none; }
+.tavern.three .hand-fan { transform: translateX(-50%); }
+.my-die3d { position: absolute; z-index: 41; transform: translate(-50%, -50%); }
+.my-die3d .d20 { width: 100% !important; height: 100% !important; }
+.d20.ghost { filter: none; animation: none; }
+.d20.ghost svg { opacity: 0; }
+.d20.ghost.selectable { border-radius: 50%; box-shadow: 0 0 0 3px var(--select), 0 0 26px var(--select); filter: none; }
+.d20.ghost .after { bottom: -16px; }
+/* On the 3D table the mats use the board's full width (the camera frames the board). */
+.tavern.three .mat.near { left: 1%; width: 98%; }
+.tavern.three .mat.far { left: 9%; width: 82%; }
+.tavern.three .rail { left: 19%; width: 62%; }
+.tavern.three .mat .grain { background: var(--leather-grain) 0 0 / 220px 220px; opacity: .7; mix-blend-mode: overlay; }
+.tavern.three .mat::before { background: radial-gradient(ellipse at 30% 25%, color-mix(in srgb, var(--a) 100%, #fff 6%), var(--b) 80%); }

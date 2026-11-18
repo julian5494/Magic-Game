@@ -102,6 +102,8 @@ export interface GameView {
   passes: PlayerId[];
   log: LogEntry[];
   winner: PlayerId | null;
+  /** Who holds the Monarch, if anyone. */
+  monarch: PlayerId | null;
 }
 
 export function cardView(state: GameState, c: CardInstance): CardView {
@@ -228,6 +230,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     canPass: state.phase === 'playing' && state.priority === you && state.decisions.length === 0,
     log: state.log.slice(-400),
     winner: state.winner,
+    monarch: state.monarch ?? null,
   };
 }
 

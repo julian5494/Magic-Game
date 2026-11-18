@@ -109,6 +109,7 @@ function base(cards: CardView[], players: PlayerView[], over: Partial<GameView>)
     passes: [],
     log: [],
     winner: null,
+    monarch: null,
     ...over,
   };
 }
