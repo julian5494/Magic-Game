@@ -2,7 +2,9 @@ import {
   act, buildPrecon, buildView, chooseBotAction, createGame, PRECONS, RulesError,
 } from '../engine';
 import type { Action, DeckList, GameState } from '../engine';
+import type { GameView } from '../engine/view';
 import type { RoomSummary, RoomView, ServerMessage } from '../shared/protocol';
+import { bulkCard, tokenImage } from './bulk';
 import { prepareDeck } from './decks';
 
 export interface Seat {
@@ -179,13 +181,13 @@ export class Room {
     for (const seat of this.seats) {
       if (seat.isBot) continue;
       const c = this.clients.get(seat.playerId);
-      if (c?.connected) c.send({ t: 'game', view: buildView(this.state, seat.playerId) });
+      if (c?.connected) c.send({ t: 'game', view: withTokenArt(buildView(this.state, seat.playerId)) });
     }
   }
 
   sendGameTo(playerId: string): void {
     const c = this.clients.get(playerId);
-    if (c && this.state) c.send({ t: 'game', view: buildView(this.state, playerId) });
+    if (c && this.state) c.send({ t: 'game', view: withTokenArt(buildView(this.state, playerId)) });
   }
 
   broadcastRoom(): void {
@@ -270,4 +272,26 @@ export class Lobby {
       if (now - r.emptySince > EMPTY_ROOM_TTL_MS) this.rooms.delete(c);
     }
   }
+}
+
+/** Give tokens their real art from Scryfall's token printings. */
+function withTokenArt(view: GameView): GameView {
+  for (const c of Object.values(view.cards)) {
+    if (!c.token || c.image) continue;
+    // Engine token names look like "Treasure Token" or "Lifelink Soldier Token"; Scryfall's are "Treasure", "Soldier".
+    const bare = c.name.replace(/\s+Token$/i, '');
+    const subtypes = c.typeLine.split('—')[1]?.trim().split(/\s+/) ?? [];
+    const candidates = [c.name, bare, subtypes.join(' '), ...subtypes, bare.split(/\s+/).pop() ?? ''];
+    for (const name of candidates) {
+      if (!name) continue;
+      c.image = tokenImage(name, c.colors, c.types, c.basePower, c.baseToughness);
+      if (c.image) break;
+    }
+    // A token copy of a real card (e.g. from a clone effect) uses that card's art.
+    if (!c.image) {
+      const real = bulkCard(c.name);
+      c.image = real?.image_uris?.normal ?? real?.card_faces?.[0]?.image_uris?.normal;
+    }
+  }
+  return view;
 }

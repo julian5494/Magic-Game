@@ -60,7 +60,7 @@ export interface CardProps {
 
 export function Card({ card, size = 'medium', selectable, selected, attacking, blocking, dim, badge, onClick, onHover, showTapped = true, extra, dropOk }: CardProps) {
   const [imgFailed, setImgFailed] = useState(false);
-  const useImage = imagesEnabled() && !card.token && !imgFailed;
+  const useImage = imagesEnabled() && (!card.token || !!card.image) && !imgFailed;
   const src = card.image ?? imageUrl(card.name);
   const tapped = showTapped && card.tapped;
   const buffed = card.power !== undefined && card.basePower !== undefined && (card.power > card.basePower || (card.toughness ?? 0) > (card.baseToughness ?? 0));
@@ -136,7 +136,7 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
 
 export function CardPreview({ card }: { card: CardView }) {
   const [imgFailed, setImgFailed] = useState(false);
-  const useImage = imagesEnabled() && !card.token && !imgFailed;
+  const useImage = imagesEnabled() && (!card.token || !!card.image) && !imgFailed;
   return (
     <div className="preview">
       {useImage && <img src={card.image ?? imageUrl(card.name)} alt={card.name} onError={() => setImgFailed(true)} />}

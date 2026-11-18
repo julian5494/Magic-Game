@@ -9,7 +9,7 @@ import { GameBoard } from './GameBoard';
  * open /?showcase=effects or /?showcase=combat.
  */
 export function Showcase({ scene }: { scene: string }) {
-  const [view] = useState(() => (scene === 'combat' ? combatScene() : effectsScene()));
+  const [view] = useState(() => (scene === 'combat' ? combatScene() : scene === 'blocks' ? combatScene(true) : effectsScene()));
   const net: NetState = {
     connected: true,
     playerId: 'me',
@@ -158,7 +158,7 @@ function effectsScene(): GameView {
   return base([...mine, ...opp, ...hand, ...others], players, {});
 }
 
-function combatScene(): GameView {
+function combatScene(declaring = false): GameView {
   const cmd = card('Trostani, Selesnya\'s Voice', 'me', ['Legendary', 'Creature'], { zone: 'command', commander: true, cost: '{3}{G}{W}', colors: ['G', 'W'], pt: [2, 5], commanderTax: 0 });
   const wurm = card('Craw Wurm', 'p2', ['Creature'], { pt: [6, 4], kw: ['Trample'], colors: ['G'], tapped: true });
   const elf1 = card('Llanowar Elves', 'p2', ['Creature'], { pt: [1, 1], colors: ['G'], tapped: true });
@@ -178,14 +178,18 @@ function combatScene(): GameView {
     activePlayer: 'p2',
     step: 'declareBlockers',
     priority: 'me',
+    decision: declaring
+      ? { id: 'd1', player: 'me', kind: 'declareBlockers', prompt: 'Declare blockers', blockers: [serra.id, sigarda.id, bears.id], attacking: [wurm.id, elf1.id, elf2.id, knight.id], handler: 'core:blocks' }
+      : null,
+    canPass: !declaring,
     combat: {
       attackers: [
-        { id: wurm.id, defender: 'me', blockedBy: [serra.id], blocked: true },
-        { id: elf1.id, defender: 'me', blockedBy: [sigarda.id], blocked: true },
+        { id: wurm.id, defender: 'me', blockedBy: declaring ? [] : [serra.id], blocked: !declaring },
+        { id: elf1.id, defender: 'me', blockedBy: declaring ? [] : [sigarda.id], blocked: !declaring },
         { id: elf2.id, defender: 'me', blockedBy: [], blocked: false },
         { id: knight.id, defender: 'me', blockedBy: [], blocked: false },
       ],
-      blockersDeclared: true,
+      blockersDeclared: !declaring,
       firstStrikeDone: false,
       dealtFirstStrike: [],
     },

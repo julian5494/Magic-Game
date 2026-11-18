@@ -18,6 +18,16 @@ export interface BulkCard extends ScryCard {
 }
 
 const byName = new Map<string, BulkCard>();
+
+/** Token printings (Treasure, Goblin, Soldier…) so tokens on the battlefield can show real art. */
+interface TokenArt {
+  colors: string[];
+  types: string;
+  power?: string;
+  toughness?: string;
+  image: string;
+}
+const tokens = new Map<string, TokenArt[]>();
 let loading: Promise<number> | null = null;
 
 export function slimCard(c: any): BulkCard {
@@ -69,6 +79,7 @@ async function download(): Promise<void> {
 
 async function readFile(): Promise<number> {
   byName.clear();
+  tokens.clear();
   const rl = createInterface({ input: createReadStream(BULK_FILE).pipe(createGunzip()), crlfDelay: Infinity });
   let first = true;
   for await (let line of rl) {
@@ -81,6 +92,17 @@ async function readFile(): Promise<number> {
     try {
       c = JSON.parse(line);
     } catch {
+      continue;
+    }
+    if (c.layout === 'token' || c.layout === 'double_faced_token') {
+      const f = c.card_faces?.[0] ?? c;
+      const image = f.image_uris?.normal ?? c.image_uris?.normal;
+      if (image && f.name) {
+        const key = normalizeName(f.name);
+        const list = tokens.get(key) ?? [];
+        list.push({ colors: f.colors ?? c.colors ?? [], types: f.type_line ?? '', power: f.power, toughness: f.toughness, image });
+        tokens.set(key, list);
+      }
       continue;
     }
     if (!isRealCard(c)) continue;
@@ -125,4 +147,15 @@ export function bulkCards(): BulkCard[] {
 
 export function bulkSize(): number {
   return byName.size;
+}
+
+/** Best matching token art for a token on the battlefield (same name, then colors, types and P/T). */
+export function tokenImage(name: string, colors: string[], types: string[], power?: number, toughness?: number): string | undefined {
+  const list = tokens.get(normalizeName(name));
+  if (!list?.length) return undefined;
+  const score = (t: TokenArt) =>
+    (t.colors.length === colors.length && t.colors.every((c) => colors.includes(c)) ? 4 : 0) +
+    (types.every((ty) => t.types.includes(ty)) ? 2 : 0) +
+    (power !== undefined && String(power) === t.power && String(toughness) === t.toughness ? 1 : 0);
+  return list.reduce((best, t) => (score(t) > score(best) ? t : best), list[0]).image;
 }
