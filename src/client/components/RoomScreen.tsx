@@ -9,7 +9,6 @@ export function RoomScreen({ net, send }: { net: NetState; send: (m: ClientMessa
   const [mode, setMode] = useState<'precon' | 'custom'>('precon');
   const [list, setList] = useState('');
   const [botDeck, setBotDeck] = useState('');
-  const [showPool, setShowPool] = useState(false);
 
   return (
     <div className="room">
@@ -71,7 +70,7 @@ export function RoomScreen({ net, send }: { net: NetState; send: (m: ClientMessa
               Ready-made decks
             </button>
             <button className={mode === 'custom' ? 'active' : ''} onClick={() => setMode('custom')}>
-              Paste a decklist
+              Import a deck
             </button>
           </div>
           {mode === 'precon' ? (
@@ -86,32 +85,104 @@ export function RoomScreen({ net, send }: { net: NetState; send: (m: ClientMessa
             </ul>
           ) : (
             <div className="custom-deck">
+              <p className="muted small">
+                Paste an <strong>Archidekt</strong> or <strong>Moxfield</strong> link, or the decklist text exported from any site
+                (Moxfield: <em>More → Export</em>; Archidekt, MTGGoldfish, EDHREC and Arena exports all work). Every card is looked up on
+                Scryfall, including the printing (art) you picked.
+              </p>
               <textarea
                 value={list}
                 onChange={(e) => setList(e.target.value)}
-                placeholder={'Commander\n1 Adeliz, the Cinder Wind\n\nDeck\n1 Sol Ring\n1 Lightning Bolt\n...\n30 Island'}
-                rows={14}
+                placeholder={'https://archidekt.com/decks/123456/my-deck\n\n— or —\n\nCommander\n1 Atraxa, Praetors\' Voice (2X2) 190\n\nDeck\n1 Sol Ring (CMR) 472\n...'}
+                rows={12}
               />
               <div className="row">
-                <button className="primary" onClick={() => send({ t: 'setDeck', list })}>
-                  Check &amp; use deck
+                <button className="primary" disabled={!list.trim() || net.deckCheck?.pending} onClick={() => send({ t: 'setDeck', source: list })}>
+                  {net.deckCheck?.pending ? 'Importing…' : 'Import deck'}
                 </button>
-                <button onClick={() => setShowPool(!showPool)}>{showPool ? 'Hide' : 'Show'} supported cards</button>
               </div>
-              {net.deckCheck && !net.deckCheck.ok && (
-                <ul className="errors">
-                  {net.deckCheck.errors.slice(0, 12).map((e, i) => (
-                    <li key={i}>{e}</li>
-                  ))}
-                  {net.deckCheck.errors.length > 12 && <li>…and {net.deckCheck.errors.length - 12} more</li>}
-                </ul>
-              )}
-              {net.deckCheck?.ok && <p className="ok">Deck accepted.</p>}
-              {showPool && <div className="pool">{net.cardPool.join(' · ')}</div>}
+              <DeckReport net={net} onPickCommander={(c) => send({ t: 'setDeck', source: list, commanders: c })} />
             </div>
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function DeckReport({ net, onPickCommander }: { net: NetState; onPickCommander: (c: string[]) => void }) {
+  const r = net.deckCheck;
+  const [picked, setPicked] = useState<string[]>([]);
+  const [showPartial, setShowPartial] = useState(false);
+  if (!r || r.pending) return null;
+  const cov = r.coverage;
+  return (
+    <div className="deck-report">
+      {r.ok ? <p className="ok">Deck accepted{r.deckName ? `: ${r.deckName}` : ''}.</p> : null}
+      {r.errors.length > 0 && (
+        <ul className="errors">
+          {r.errors.slice(0, 12).map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+          {r.errors.length > 12 && <li>…and {r.errors.length - 12} more</li>}
+        </ul>
+      )}
+      {r.commanderCandidates && r.commanderCandidates.length > 0 && !r.ok && (
+        <div className="cmd-pick">
+          <span>Commander (pick 1, or 2 partners):</span>
+          <div className="chips">
+            {r.commanderCandidates.map((c) => (
+              <button
+                key={c}
+                className={picked.includes(c) ? 'active' : ''}
+                onClick={() => setPicked(picked.includes(c) ? picked.filter((x) => x !== c) : [...picked, c].slice(-2))}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          <button className="primary" disabled={!picked.length} onClick={() => onPickCommander(picked)}>
+            Use as commander
+          </button>
+        </div>
+      )}
+      {cov && (
+        <div className="coverage">
+          <div className="cov-bar">
+            <span className="cov-auto" style={{ flex: cov.automated }} title="Fully automated" />
+            <span className="cov-partial" style={{ flex: cov.partial.length }} title="Partly automated" />
+            <span className="cov-blocked" style={{ flex: cov.blocked.length }} title="Can't be played yet" />
+          </div>
+          <div className="small">
+            <span className="cov-dot auto" /> {cov.automated} fully automated · <span className="cov-dot partial" /> {cov.partial.length} partly ·{' '}
+            <span className="cov-dot blocked" /> {cov.blocked.length} can't be played yet
+            <button className="link" onClick={() => setShowPartial(!showPartial)}>
+              {showPartial ? 'hide details' : 'details'}
+            </button>
+          </div>
+          {showPartial && (
+            <ul className="cov-list small">
+              {cov.blocked.map((b) => (
+                <li key={b.name}>
+                  <strong className="blocked-text">{b.name}</strong> — can't be cast yet: {b.missing.join(' / ') || 'its effect isn\'t supported'}
+                </li>
+              ))}
+              {cov.partial.map((b) => (
+                <li key={b.name}>
+                  <strong>{b.name}</strong> — not automated (won't happen): {b.missing.join(' / ')}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {r.warnings.length > 0 && !cov && (
+        <ul className="muted small">
+          {r.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

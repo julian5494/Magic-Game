@@ -144,11 +144,20 @@ wss.on('connection', (socket) => {
           send({ t: 'game', view: null });
           lobby.cleanup();
           return;
-        case 'setDeck':
+        case 'setDeck': {
           if (!room) return fail('Join a table first');
-          send(room.setDeck(me.playerId, msg.precon, msg.list));
-          room.broadcastRoom();
+          if (!msg.precon) send({ t: 'deckCheck', ok: false, errors: [], warnings: [], pending: true });
+          room
+            .setDeck(me.playerId, msg.precon, msg.source, msg.commanders)
+            .then((m) => {
+              send(m);
+              room.broadcastRoom();
+            })
+            .catch((e) => {
+              send({ t: 'deckCheck', ok: false, errors: [(e as Error).message], warnings: [] });
+            });
           return;
+        }
         case 'addBot':
           if (!room) return fail('Join a table first');
           if (room.hostId !== me.playerId) return fail('Only the host can add bots');

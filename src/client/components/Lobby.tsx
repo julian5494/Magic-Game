@@ -70,7 +70,9 @@ export function Lobby({ net, send }: { net: NetState; send: (m: ClientMessage) =
       </section>
       <section className="panel muted small">
         <p>
-          {net.cardPool.length} cards are implemented with automatic rules. Pick a ready-made deck or paste your own list using those cards.
+          Bring any Commander deck: paste an Archidekt or Moxfield link or any exported decklist. Card rules are read from
+          Scryfall and automated; anything the game can't enforce yet is clearly marked, and there are no manual "move a card"
+          actions, so nobody can draw or tutor when they shouldn't.
         </p>
       </section>
     </div>

@@ -5,6 +5,8 @@ export interface ManaCost {
   generic: number;
   W: number; U: number; B: number; R: number; G: number; C: number;
   x: number;
+  /** Hybrid pips, each a list of alternatives: a color symbol or '2' (two generic). */
+  hybrid?: string[][];
 }
 
 export function emptyCost(): ManaCost {
@@ -21,19 +23,45 @@ export function parseCost(cost: string | undefined): ManaCost {
     if (/^\d+$/.test(s)) c.generic += parseInt(s, 10);
     else if (s === 'X') c.x += 1;
     else if (s in c) (c as any)[s] += 1;
-    else throw new Error(`Unsupported mana symbol {${s}}`);
+    else if (/^[WUBRG2]\/[WUBRGP]$/.test(s)) {
+      // Hybrid ({W/U}, {2/G}). Phyrexian ({G/P}) is treated as its color only.
+      const [a, b] = s.split('/');
+      c.hybrid = [...(c.hybrid ?? []), b === 'P' ? [a] : [a, b]];
+    } else c.generic += 1; // unknown symbols (snow etc.) count as generic for mana value; such cards aren't castable
   }
   return c;
 }
 
+/** All concrete costs a hybrid cost can be paid as (cheapest-looking first). */
+export function costVariants(cost: ManaCost): ManaCost[] {
+  const hy = cost.hybrid ?? [];
+  let out: ManaCost[] = [{ ...cost, hybrid: undefined }];
+  for (const alts of hy) {
+    const next: ManaCost[] = [];
+    for (const base of out) {
+      for (const a of alts) {
+        const v = { ...base };
+        if (a === '2') v.generic += 2;
+        else (v as any)[a] += 1;
+        next.push(v);
+      }
+    }
+    out = next.slice(0, 64);
+  }
+  return out;
+}
+
+
 export function manaValue(cost: string | undefined): number {
   const c = parseCost(cost);
-  return c.generic + c.W + c.U + c.B + c.R + c.G + c.C;
+  const hybrid = (c.hybrid ?? []).reduce((n, alts) => n + (alts.includes('2') ? 2 : 1), 0);
+  return c.generic + c.W + c.U + c.B + c.R + c.G + c.C + hybrid;
 }
 
 export function costColors(cost: string | undefined): Color[] {
   const c = parseCost(cost);
-  return COLORS.filter((col) => c[col] > 0);
+  const hy = new Set((c.hybrid ?? []).flat());
+  return COLORS.filter((col) => c[col] > 0 || hy.has(col));
 }
 
 export function addGeneric(cost: ManaCost, n: number): ManaCost {
@@ -63,8 +91,10 @@ export interface ManaSource {
   ability: number;
   produces: ManaSym[];
   amount: number;
-  /** Sources that sacrifice themselves (Treasure) are used last. */
+  /** Sources that sacrifice themselves (Treasure) or hurt (painlands) are used last. */
   costly: boolean;
+  /** Produces all of these symbols at once. */
+  fixed?: ManaSym[];
 }
 
 export interface PaymentPlan {
@@ -77,6 +107,33 @@ export interface PaymentPlan {
  * Prefers inflexible sources (basic lands) so flexible ones stay available, like Arena's auto-tapper.
  */
 export function solvePayment(cost: ManaCost, pool: Pool, sources: ManaSource[]): PaymentPlan | null {
+  const fixed = sources.filter((s) => s.fixed);
+  const normal = sources.filter((s) => !s.fixed);
+  const direct = solveSimple(cost, pool, normal);
+  if (direct || fixed.length === 0) return direct;
+  // Try adding multi-mana sources (eg. {R}{W} lands), fewest first.
+  const k = Math.min(fixed.length, 8);
+  for (let size = 1; size <= k; size++) {
+    for (const combo of combinations(fixed.slice(0, k), size)) {
+      const p = { ...pool };
+      for (const s of combo) for (const sym of s.fixed!) p[sym]++;
+      const plan = solveSimple(cost, p, normal);
+      if (plan) return { taps: [...combo.map((s) => ({ id: s.id, ability: s.ability, color: s.fixed![0] })), ...plan.taps] };
+    }
+  }
+  return null;
+}
+
+function combinations<T>(arr: T[], size: number): T[][] {
+  if (size === 0) return [[]];
+  const out: T[][] = [];
+  arr.forEach((x, i) => {
+    for (const rest of combinations(arr.slice(i + 1), size - 1)) out.push([x, ...rest]);
+  });
+  return out;
+}
+
+function solveSimple(cost: ManaCost, pool: Pool, sources: ManaSource[]): PaymentPlan | null {
   const p: Pool = { ...pool };
   const pips: ManaSym[] = [];
   for (const k of ['W', 'U', 'B', 'R', 'G', 'C'] as const) {

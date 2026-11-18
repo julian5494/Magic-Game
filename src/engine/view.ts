@@ -33,6 +33,10 @@ export interface CardView {
   commander: boolean;
   /** Extra mana a commander costs from the command zone. */
   commanderTax?: number;
+  image?: string;
+  /** Rules text the engine doesn't automate. */
+  unsupported?: string[];
+  cannotCast?: boolean;
 }
 
 export interface PlayerView {
@@ -50,7 +54,8 @@ export interface PlayerView {
   lost: boolean;
   lossReason?: string;
   isBot: boolean;
-  autoPass: 'smart' | 'none';
+  autoPass: 'smart' | 'stack' | 'none';
+  holding: boolean;
   passUntilEndOfTurn: boolean;
   colorIdentity: Color[];
 }
@@ -82,6 +87,8 @@ export interface GameView {
   waitingOn: PlayerId[];
   legal: PlayableAction[];
   canPass: boolean;
+  /** Players who have passed priority in succession (resolution happens when everyone has). */
+  passes: PlayerId[];
   log: LogEntry[];
   winner: PlayerId | null;
 }
@@ -115,6 +122,9 @@ export function cardView(state: GameState, c: CardInstance): CardView {
     token: c.token,
     commander: c.commander,
     commanderTax: c.commander ? 2 * (getPlayer(state, c.owner).commanderCasts[c.id] ?? 0) : undefined,
+    image: c.art ?? def.image,
+    unsupported: def.unsupported?.length ? def.unsupported : undefined,
+    cannotCast: def.cannotCast || undefined,
   };
 }
 
@@ -155,6 +165,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     lossReason: p.lossReason,
     isBot: p.isBot,
     autoPass: p.autoPass,
+    holding: !!p.holding,
     passUntilEndOfTurn: p.passUntilTurn === state.turn,
     colorIdentity: p.commanders.flatMap((id) => (state.cards[id] ? colorIdentity(getDef(state.cards[id].def)) : [])),
   }));
@@ -192,6 +203,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     decision: decision ? redactDecision(decision) : null,
     waitingOn,
     legal: me ? legalActions(state, you) : [],
+    passes: [...state.passes],
     canPass: state.phase === 'playing' && state.priority === you && state.decisions.length === 0,
     log: state.log.slice(-150),
     winner: state.winner,

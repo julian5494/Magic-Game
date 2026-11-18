@@ -1,8 +1,9 @@
 import {
-  act, buildPrecon, buildView, chooseBotAction, createGame, PRECONS, RulesError, validateDeck,
+  act, buildPrecon, buildView, chooseBotAction, createGame, PRECONS, RulesError,
 } from '../engine';
 import type { Action, DeckList, GameState } from '../engine';
 import type { RoomSummary, RoomView, ServerMessage } from '../shared/protocol';
+import { prepareDeck } from './decks';
 
 export interface Seat {
   playerId: string;
@@ -99,7 +100,7 @@ export class Room {
     return !this.seats.some((s) => !s.isBot && this.clients.get(s.playerId)?.connected);
   }
 
-  setDeck(playerId: string, precon?: string, list?: string): ServerMessage {
+  async setDeck(playerId: string, precon?: string, source?: string, commanders?: string[]): Promise<ServerMessage> {
     const seat = this.seats.find((s) => s.playerId === playerId);
     if (!seat) throw new Error('You are not seated at this table');
     if (this.state) throw new Error('The game has already started');
@@ -110,12 +111,21 @@ export class Room {
       seat.deckName = p.name;
       return { t: 'deckCheck', ok: true, errors: [], warnings: [], deckName: p.name };
     }
-    const check = validateDeck(list ?? '');
-    if (check.ok && check.deck) {
-      seat.deck = check.deck;
-      seat.deckName = `${check.deck.commander} (custom)`;
+    const report = await prepareDeck({ source: source ?? '', commanders });
+    if (this.state) throw new Error('The game has already started');
+    if (report.ok && report.deck) {
+      seat.deck = report.deck;
+      seat.deckName = report.deckName ?? report.deck.commanders.join(' & ');
     }
-    return { t: 'deckCheck', ok: check.ok, errors: check.errors, warnings: check.warnings, deckName: seat.deckName ?? undefined };
+    return {
+      t: 'deckCheck',
+      ok: report.ok,
+      errors: report.errors,
+      warnings: report.warnings,
+      deckName: report.deckName,
+      commanderCandidates: report.commanderCandidates,
+      coverage: report.coverage,
+    };
   }
 
   addBot(precon?: string): void {
@@ -144,7 +154,7 @@ export class Room {
     const missing = this.seats.find((s) => !s.deck);
     if (missing) throw new Error(`${missing.name} hasn't chosen a deck yet`);
     this.state = createGame(
-      this.seats.map((s) => ({ id: s.playerId, name: s.name, commander: s.deck!.commander, cards: s.deck!.cards, isBot: s.isBot })),
+      this.seats.map((s) => ({ id: s.playerId, name: s.name, commander: s.deck!.commanders, cards: s.deck!.cards, art: s.deck!.art, isBot: s.isBot })),
       Math.floor(Math.random() * 2147483647),
     );
     this.broadcastGame();

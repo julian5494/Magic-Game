@@ -119,8 +119,22 @@ export function moveCard(
   card.controller = to === 'battlefield' || to === 'stack' ? opts.controller ?? card.owner : card.owner;
 
   if (to === 'battlefield') {
-    card.tapped = !!opts.tapped || !!defOf(card).entersTapped;
+    const def = defOf(card);
+    card.tapped = !!opts.tapped || !!def.entersTapped || !!def.entersTappedIf?.(state, card.controller);
     state.battlefield.push(id);
+    if (def.shockLand && !card.tapped) {
+      queueDecision(state, {
+        player: card.controller,
+        kind: 'chooseOption',
+        prompt: `${def.name}: pay 2 life? If you don't, it enters tapped.`,
+        options: [
+          { id: 'pay', label: 'Pay 2 life (untapped)' },
+          { id: 'tapped', label: 'Enters tapped' },
+        ],
+        handler: 'core:shock',
+        data: { card: id, inc: card.inc },
+      }, true);
+    }
     pushEvent(state, { t: 'etb', card: id, controller: card.controller });
   } else if (to !== 'stack') {
     const arr = zoneArray(state, card, to)!;
@@ -387,6 +401,10 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
     },
 
     damage: (to, n) => dealDamage(state, sourceForDamage(), to, n, false),
+    damageFrom: (src, to, n) => {
+      const c = state.cards[src];
+      if (c) dealDamage(state, c, to, n, false);
+    },
     draw: (p, n) => drawCards(state, p, n),
     gainLife: (p, n) => gainLife(state, p, n),
     loseLife: (p, n) => loseLife(state, p, n),
@@ -478,6 +496,23 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
           handler: 'core:sacrifice',
         });
       }
+    },
+    chooseAndBounce(p, filter, n) {
+      const options = battlefieldCards(state).filter((c) => c.controller === p && matchesFilter(state, c, filter, p, init.source));
+      if (options.length === 0) return;
+      if (options.length <= n) {
+        for (const o of options) moveCard(state, o.id, 'hand');
+        return;
+      }
+      queueDecision(state, {
+        player: p,
+        kind: 'chooseCards',
+        prompt: `Return ${n} to your hand`,
+        cards: options.map((o) => o.id),
+        min: n,
+        max: n,
+        handler: 'core:bounceChosen',
+      });
     },
     discard(p, n) {
       const hand = getPlayer(state, p).hand;

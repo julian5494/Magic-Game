@@ -1,5 +1,6 @@
 import type { Action } from '../engine/types';
 import type { GameView } from '../engine/view';
+import type { Coverage } from '../engine/deck';
 
 export interface PreconInfo {
   id: string;
@@ -40,7 +41,7 @@ export type ClientMessage =
   | { t: 'createRoom' }
   | { t: 'joinRoom'; code: string }
   | { t: 'leaveRoom' }
-  | { t: 'setDeck'; precon?: string; list?: string }
+  | { t: 'setDeck'; precon?: string; source?: string; commanders?: string[] }
   | { t: 'addBot'; precon?: string }
   | { t: 'removeSeat'; playerId: string }
   | { t: 'startGame' }
@@ -52,6 +53,15 @@ export type ServerMessage =
   | { t: 'rooms'; rooms: RoomSummary[] }
   | { t: 'room'; room: RoomView | null }
   | { t: 'game'; view: GameView | null }
-  | { t: 'deckCheck'; ok: boolean; errors: string[]; warnings: string[]; deckName?: string }
+  | {
+      t: 'deckCheck';
+      ok: boolean;
+      errors: string[];
+      warnings: string[];
+      deckName?: string;
+      commanderCandidates?: string[];
+      coverage?: Coverage;
+      pending?: boolean;
+    }
   | { t: 'error'; message: string }
   | { t: 'chat'; from: string; text: string; at: number };

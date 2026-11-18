@@ -2,6 +2,7 @@
 // GameState is plain JSON so it can be cloned, persisted and sent over the wire.
 
 export type PlayerId = string;
+export type AutoPassMode = 'smart' | 'stack' | 'none';
 export type CardId = string;
 
 export type Color = 'W' | 'U' | 'B' | 'R' | 'G';
@@ -60,6 +61,8 @@ export interface CardInstance {
   eotControlOf?: PlayerId | null;
   /** X value paid while on the stack. */
   x?: number;
+  /** Image of the chosen printing. */
+  art?: string;
 }
 
 export interface Player {
@@ -85,7 +88,15 @@ export interface Player {
   mulligans: number;
   kept: boolean;
   isBot: boolean;
-  autoPass: 'smart' | 'none';
+  /**
+   * When to stop for priority automatically:
+   * - smart: like Arena; skip when you have nothing you could do.
+   * - stack: like smart, but always stop when an opponent puts something on the stack (hides what you hold).
+   * - none: full control, stop every time you receive priority.
+   */
+  autoPass: AutoPassMode;
+  /** Keep priority after casting/activating (to respond to your own spell). */
+  holding?: boolean;
   passUntilTurn: number | null;
   lifeGainedThisTurn: number;
 }
@@ -109,6 +120,7 @@ export interface StackItem {
   sourceSnapshot?: Snapshot;
   x?: number;
   sacrificed?: Snapshot;
+  modes?: number[];
 }
 
 export interface Snapshot {
@@ -144,6 +156,8 @@ export interface PendingTrigger {
   controller: PlayerId;
   event: GameEvent;
   snapshot?: Snapshot;
+  /** Set once the controller chose this trigger as the next to go on the stack. */
+  chosen?: boolean;
 }
 
 export interface AttackerInfo {
@@ -239,11 +253,11 @@ export interface GameState {
 export type Action =
   | { type: 'pass' }
   | { type: 'playLand'; cardId: CardId }
-  | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId }
-  | { type: 'activate'; cardId: CardId; ability: number; targets?: (Target | null)[]; x?: number; sacrifice?: CardId }
+  | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; modes?: number[]; hold?: boolean }
+  | { type: 'activate'; cardId: CardId; ability: number; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; color?: ManaSym; hold?: boolean }
   | { type: 'manaTap'; cardId: CardId; ability: number; color?: ManaSym }
   | { type: 'decide'; decisionId: string; answer: DecisionAnswer }
-  | { type: 'setAutoPass'; mode: 'smart' | 'none' }
+  | { type: 'setAutoPass'; mode: AutoPassMode }
   | { type: 'passUntilEndOfTurn' }
   | { type: 'concede' };
 
@@ -260,4 +274,8 @@ export interface PlayableAction {
   sacrificeOptions?: CardId[];
   sacrificeLabel?: string;
   manaColors?: ManaSym[];
+  /** Modes chosen for this playable variant of a modal spell. */
+  modes?: number[];
+  /** Mana ability with an extra cost (resolves immediately, no stack). */
+  isMana?: boolean;
 }

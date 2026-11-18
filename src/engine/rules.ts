@@ -127,6 +127,15 @@ function eventMatches(
     case 'equippedCreatureDies':
       ok = e.t === 'leaves' && e.to === 'graveyard' && isCreatureSnap(e.snap) && self.attachedTo === e.card;
       break;
+    case 'equippedCreatureAttacks':
+      ok = e.t === 'attacks' && self.attachedTo === e.card;
+      break;
+    case 'anyEtb':
+      ok = e.t === 'etb';
+      break;
+    case 'anyDies':
+      ok = e.t === 'leaves' && e.to === 'graveyard' && isCreatureSnap(e.snap);
+      break;
   }
   if (!ok) return false;
   if (t.condition) {
@@ -161,7 +170,7 @@ export function collectTriggers(state: GameState): void {
       for (const snap of left) {
         if (seen.has(snap.id)) continue;
         for (const { t, index } of triggersOf(state, snap)) {
-          const lookBack = ['dies', 'leaves', 'toGraveyardFromBattlefield', 'creatureYouControlDies', 'otherCreatureYouControlDies', 'equippedCreatureDies'];
+          const lookBack = ['dies', 'leaves', 'toGraveyardFromBattlefield', 'creatureYouControlDies', 'otherCreatureYouControlDies', 'equippedCreatureDies', 'anyDies'];
           if (!lookBack.includes(t.on)) continue;
           if (eventMatches(state, t, e, snap)) {
             state.pendingTriggers.push({ source: snap.id, def: snap.def, index, controller: snap.controller, event: e, snapshot: snap });
@@ -194,7 +203,23 @@ export function putTriggerOnStack(state: GameState, trig: PendingTrigger, target
 
 function processPendingTrigger(state: GameState): void {
   const order = apnapOrder(state);
-  state.pendingTriggers.sort((a, b) => order.indexOf(a.controller) - order.indexOf(b.controller));
+  // Stable sort keeps a chosen trigger at the front of its controller's group.
+  state.pendingTriggers.sort((a, b) => order.indexOf(a.controller) - order.indexOf(b.controller) || Number(!!b.chosen) - Number(!!a.chosen));
+  const first = state.pendingTriggers[0];
+  const mine = state.pendingTriggers.filter((t) => t.controller === first.controller);
+  const label = (t: PendingTrigger) => `${t.def}: ${getTrigger(t.def, t.index).text}`;
+  if (!first.chosen && mine.length > 1 && new Set(mine.map(label)).size > 1 && !getPlayer(state, first.controller).isBot) {
+    // The controller chooses the order of their simultaneous triggers (rule 603.3b).
+    queueDecision(state, {
+      player: first.controller,
+      kind: 'chooseOption',
+      prompt: 'Several of your abilities triggered. Choose the one to put on the stack next (abilities put on the stack later resolve first).',
+      options: mine.map((t, i) => ({ id: String(i), label: label(t) })),
+      handler: 'core:orderTrigger',
+      data: { controller: first.controller },
+    });
+    return;
+  }
   const trig = state.pendingTriggers.shift()!;
   if (getPlayer(state, trig.controller).lost) return;
   const t = getTrigger(trig.def, trig.index);
@@ -233,7 +258,7 @@ export function resolveTop(state: GameState): void {
   const def = getDef(item.def);
   if (item.kind === 'spell') {
     const card = state.cards[item.cardId];
-    const specs = def.targets ?? [];
+    const specs = item.modes && def.modes ? item.modes.flatMap((m) => def.modes![m].targets) : def.targets ?? [];
     const targets = item.targets.map((t, i) =>
       t && specs[i] && isStillLegal(state, specs[i], t, item.controller, item.cardId) ? t : null,
     );
@@ -255,7 +280,16 @@ export function resolveTop(state: GameState): void {
       }
       return;
     }
-    if (def.effect) {
+    if (item.modes && def.modes) {
+      // Each mode sees only its own targets.
+      let base = 0;
+      for (const m of item.modes) {
+        const mode = def.modes[m];
+        const slice = targets.slice(base, base + mode.targets.length);
+        base += mode.targets.length;
+        mode.effect(makeCtx(state, { controller: item.controller, source: item.cardId, targets: slice, x: item.x, sacrificed: item.sacrificed, def: def.name }));
+      }
+    } else if (def.effect) {
       def.effect(makeCtx(state, { controller: item.controller, source: item.cardId, targets, x: item.x, sacrificed: item.sacrificed, def: def.name }));
     }
     if (state.cards[item.cardId]?.zone === 'stack') moveCard(state, item.cardId, 'graveyard');

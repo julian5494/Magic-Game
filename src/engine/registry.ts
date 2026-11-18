@@ -43,3 +43,25 @@ export function findDef(name: string): CardDef | undefined {
 export function allDefs(): CardDef[] {
   return [...DB.values()];
 }
+
+/** Let a card be found by another name (eg. the full "Front // Back" name of a double-faced card). */
+export function registerAlias(alias: string, name: string): void {
+  const d = DB.get(name);
+  if (d) byLower.set(normalize(alias), d);
+}
+
+/** Register a card converted from Scryfall unless a hand-scripted (or earlier) definition exists. */
+export function registerGenerated(def: CardDef): CardDef {
+  const existing = DB.get(def.name);
+  if (existing) {
+    if (!existing.image && def.image) existing.image = def.image;
+    if (existing.banned === undefined) existing.banned = def.banned;
+    return existing;
+  }
+  registerCards([def]);
+  return DB.get(def.name)!;
+}
+
+export function normalizeName(name: string): string {
+  return normalize(name);
+}

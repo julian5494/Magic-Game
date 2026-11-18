@@ -64,6 +64,7 @@ export function PlayerPanel({
 }) {
   const active = view.activePlayer === p.id;
   const waiting = view.waitingOn.includes(p.id);
+  const passed = view.stack.length > 0 && view.passes.includes(p.id);
   const pool = Object.entries(p.manaPool).filter(([, n]) => n > 0);
   return (
     <div
@@ -76,6 +77,11 @@ export function PlayerPanel({
           {p.isBot && <span className="tag">BOT</span>}
           {isMe && <span className="tag">YOU</span>}
         </span>
+        {view.stack.length > 0 && !p.lost && (
+          <span className={`pass-chip ${passed ? 'passed' : waiting ? 'deciding' : ''}`} title="Priority">
+            {passed ? 'passed' : waiting ? 'responding…' : 'to act'}
+          </span>
+        )}
         <span className="pp-life" title="Life">
           {p.life}
         </span>

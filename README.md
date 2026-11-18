@@ -18,41 +18,46 @@ npm start            # http://localhost:3000  (PORT env var to change)
 
 Open the page, create a table, pick a deck, then add bots or share the 4-letter table code with friends (2–4 players). Refreshing the page reconnects you to your seat.
 
+## Bring your own deck
+
+There's no card collection: import any Commander deck.
+
+- **Archidekt link**: paste the deck URL.
+- **Moxfield**: Moxfield blocks automated downloads, so open the deck, choose *More → Export*, copy the text and paste it. A Moxfield link is tried first and you'll get these instructions if it's blocked.
+- **Any other site** (MTGGoldfish, EDHREC, Arena, MTGO…): paste the exported text. `1 Sol Ring (CMR) 472` lines keep the printing, so your chosen card art is what everyone sees.
+
+Every card is looked up on [Scryfall](https://scryfall.com) (cached in `.cache/`), and its rules text is turned into automated effects by `src/engine/oracle.ts`. Deck validation enforces 100 cards, singleton (with "any number of cards named" exceptions), color identity, partner and background pairings, and the Commander banned list.
+
+After importing, you get a coverage report:
+
+- **Fully automated**: everything on the card works.
+- **Partly automated**: playable, but some abilities (for example flashback or a cost reduction) aren't automated yet. Those abilities simply don't happen, and the card shows a "!" with details.
+- **Can't be played yet**: the card has a drawback or core effect the engine can't enforce (for example "doesn't untap during your untap step" or "As an additional cost, discard a card"). These stay in your deck but can't be cast, because casting them without the drawback would be cheating.
+
+On the 525 most-played Commander cards, about half are fully automated today. Coverage grows as patterns are added to the parser or cards are hand-scripted in `src/engine/cards/`. Run `npx tsx tests/coverage.ts --list` to see what's missing.
+
+## Fair play: no manual actions
+
+Unlike tabletop simulators, there's no way to drag a card, draw, shuffle, untap or change a life total by hand. The server is authoritative: every message is checked against the rules, and only actions from the current legal set are accepted. Cards you can't see (hands, libraries, search results) are never sent to your browser. `tests/security.test.ts` checks this, including a fuzz test that throws random illegal actions at the engine.
+
+## Priority, like at a real table
+
+- Nothing resolves until **every player passes priority in turn**; any response restarts the round. Player panels show who has passed and who is responding.
+- Triggered abilities go on the stack and can be responded to. If several of your abilities trigger at once, you choose their order.
+- **Hold priority** (checkbox) keeps priority after you cast something, so you can respond to your own spell.
+- **Stops** setting:
+  - *Smart* (Arena-like): skips moments where you have no possible response.
+  - *Every spell & ability opponents use*: always gives you a chance to respond, so pausing never reveals that you hold nothing.
+  - *Full control*: stops at every step.
+
 ## What's automated
 
-- **Turn structure & priority**: all steps and phases. Arena-style smart auto-pass skips steps where you have nothing to do (turn on *Full control* to stop at every step). Space bar presses the main button.
-- **Stack**: spells, activated and triggered abilities, responses, counterspells, and targets re-checked on resolution (fizzling).
-- **Mana**: auto-payment that taps basics before flexible sources. You can also click lands to float mana.
+- **Turn structure & priority**: all steps and phases. Space bar presses the main button.
+- **Stack**: spells, modal spells ("Choose one —"), activated and triggered abilities, and counterspells. Targets are re-checked on resolution (fizzling).
+- **Mana**: auto-payment that taps basics before flexible sources, avoids painlands and sacrifice sources, and pays hybrid costs. Multi-mana lands, shock/check/fast/bounce lands, and Signet-style abilities work.
 - **Combat**: attacking specific opponents, blocking (flying/reach, menace, unblockable), first strike, double strike, trample, deathtouch and lifelink.
-- **State-based actions**: lethal damage, 0 toughness, the legend rule, aura/equipment cleanup, +1/+1 and -1/-1 counter cancellation, and losing at 0 life, on drawing from an empty library, or at 21 commander damage.
-- **Commander rules**: 40 life, command zone, commander tax, choosing to move your commander to the command zone, a free first mulligan (London mulligan), color identity and singleton deck validation. When a player loses, their cards leave the game.
-- **Hidden information**: opponents' hands and libraries are never sent to your browser.
-
-## Cards
-
-About 210 cards are scripted, all playable in custom decks, plus four ready-made 100-card decks:
-
-| Deck | Commander |
-|---|---|
-| GW tokens & lifegain | Trostani, Selesnya's Voice |
-| UR spells | Adeliz, the Cinder Wind |
-| BG graveyard | Izoni, Thousand-Eyed |
-| RW aggro | Tajic, Legion's Edge |
-
-Custom decklists use the usual `1 Card Name` format with a `Commander` section. Only implemented cards are accepted; the room screen lists them.
-
-### Adding a card
-
-Cards are plain data plus small effect functions in `src/engine/cards/*.ts`:
-
-```ts
-creature('Flametongue Kavu', '{3}{R}', ['Kavu'], 4, 2, {
-  text: 'When Flametongue Kavu enters, it deals 4 damage to target creature.',
-  triggers: [{ on: 'etb', text: 'Deal 4 damage to target creature.', targets: [T.creature()], effect: dmg(4) }],
-}),
-```
-
-The effect context (`Ctx` in `src/engine/cardtypes.ts`) has the building blocks: damage, draw, destroy, exile, bounce, tokens, counters, pump, search, scry, sacrifice, discard, fight, control changes, and player choices.
+- **State-based actions**: lethal damage, 0 toughness, the legend rule, aura/equipment cleanup, and counter cancellation. Players lose at 0 life, on drawing from an empty library, or at 21 commander damage.
+- **Commander rules**: 40 life, command zone, commander tax, partners, the choice to move your commander to the command zone, and a free first mulligan (London mulligan).
 
 ## Layout
 
@@ -64,8 +69,12 @@ src/shared/   client/server protocol types
 tests/        rules tests and bot-vs-bot simulation (npx tsx tests/simulate.ts 20)
 ```
 
+## Hosting notes
+
+The server needs outbound HTTPS to `api.scryfall.com` and `archidekt.com` (and tries `api2.moxfield.com`). Behind a corporate proxy, start it with `NODE_USE_ENV_PROXY=1` so Node's `fetch` uses `HTTPS_PROXY`. Players' browsers load card images from `cards.scryfall.io`.
+
 ## Not yet supported
 
-Planeswalkers, partner commanders, copy/clone effects, modal ("choose one") spells, damage division, regeneration and protection. Bots are heuristic and fairly weak.
+Planeswalker loyalty abilities, the back faces of double-faced cards, copy/clone effects, damage division, kicker, flashback, protection and replacement effects (Doubling Season, etc.). Cards that need these are marked as described above. Bots are heuristic and fairly weak.
 
 Card images are loaded from Scryfall. This is unofficial fan content permitted under the Wizards of the Coast Fan Content Policy; it is not approved or endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC.

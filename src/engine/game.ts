@@ -1,6 +1,6 @@
 import type { ActivatedAbility, CardDef } from './cardtypes';
 import type { ManaCost, ManaSource } from './mana';
-import { emptyPool, parseCost, payFromPool, solvePayment } from './mana';
+import { costVariants, emptyPool, parseCost, payFromPool, solvePayment } from './mana';
 import {
   drawCards, gainLife, legalTargets, loseLife, makeCard, makeCtx, moveCard, pushEvent, queueDecision, runCardHandler,
   sameTarget, shuffle, tapPermanent,
@@ -26,6 +26,7 @@ export class RulesError extends Error {}
 
 function abilityColors(state: GameState, pid: PlayerId, ab: ActivatedAbility): ManaSym[] {
   const m = ab.mana!;
+  if (m.fixed) return [...new Set(m.fixed)];
   if (m.colors === 'any') return [...COLORS];
   if (m.colors === 'identity') {
     const id = commanderIdentity(state, pid);
@@ -45,9 +46,17 @@ export function manaSources(state: GameState, pid: PlayerId, exclude: CardId[] =
   for (const c of battlefieldCards(state)) {
     if (c.controller !== pid || exclude.includes(c.id)) continue;
     defOf(c).abilities?.forEach((ab, i) => {
-      if (!ab.mana || ab.cost.mana || ab.cost.sacrifice || ab.cost.life) return;
+      if (!ab.mana || ab.cost.mana || ab.cost.sacrifice) return;
+      if (ab.cost.life && getPlayer(state, pid).life < ab.cost.life) return;
       if (ab.cost.tap && !canUseTap(state, c)) return;
-      out.push({ id: c.id, ability: i, produces: abilityColors(state, pid, ab), amount: ab.mana.amount ?? 1, costly: !!ab.cost.sacrificeSelf });
+      out.push({
+        id: c.id,
+        ability: i,
+        produces: abilityColors(state, pid, ab),
+        amount: ab.mana.amount ?? 1,
+        costly: !!ab.cost.sacrificeSelf || !!ab.mana.pain || !!ab.cost.life,
+        fixed: ab.mana.fixed,
+      });
     });
   }
   return out;
@@ -59,19 +68,33 @@ function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, i
   const sym = color && colors.includes(color) ? color : colors[0];
   if (ab.cost.tap) tapPermanent(state, c);
   if (ab.cost.sacrificeSelf) moveCard(state, c.id, 'graveyard');
-  getPlayer(state, pid).manaPool[sym] += ab.mana!.amount ?? 1;
+  const pool = getPlayer(state, pid).manaPool;
+  if (ab.mana!.fixed) for (const s of ab.mana!.fixed) pool[s]++;
+  else pool[sym] += ab.mana!.amount ?? 1;
+  if (ab.mana!.pain) loseLife(state, pid, ab.mana!.pain);
+  if (ab.cost.life) loseLife(state, pid, ab.cost.life);
+}
+
+function findPayment(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[]) {
+  const pool = getPlayer(state, pid).manaPool;
+  const sources = manaSources(state, pid, exclude);
+  for (const v of costVariants(cost)) {
+    const plan = solvePayment(v, pool, sources);
+    if (plan) return { plan, cost: v };
+  }
+  return null;
 }
 
 function canPay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] = []): boolean {
-  return solvePayment(cost, getPlayer(state, pid).manaPool, manaSources(state, pid, exclude)) !== null;
+  return findPayment(state, pid, cost, exclude) !== null;
 }
 
 function pay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] = []): void {
   const p = getPlayer(state, pid);
-  const plan = solvePayment(cost, p.manaPool, manaSources(state, pid, exclude));
-  if (!plan) throw new RulesError('Not enough mana');
-  for (const t of plan.taps) activateManaAbility(state, pid, state.cards[t.id], t.ability, t.color);
-  if (!payFromPool(p.manaPool, cost)) throw new RulesError('Mana payment failed');
+  const found = findPayment(state, pid, cost, exclude);
+  if (!found) throw new RulesError('Not enough mana');
+  for (const t of found.plan.taps) activateManaAbility(state, pid, state.cards[t.id], t.ability, t.color);
+  if (!payFromPool(p.manaPool, found.cost)) throw new RulesError('Mana payment failed');
 }
 
 function spellCost(state: GameState, card: CardInstance, x: number): ManaCost {
@@ -122,7 +145,7 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
 
   if (sorcery && p.landsPlayed < 1) {
     for (const id of p.hand) {
-      if (hasType(state.cards[id], 'Land')) out.push({ type: 'playLand', cardId: id, label: 'Play land', targets: [] });
+      if (hasType(state.cards[id], 'Land') && !defOf(state.cards[id]).cannotCast) out.push({ type: 'playLand', cardId: id, label: 'Play land', targets: [] });
     }
   }
 
@@ -130,32 +153,53 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
   for (const id of castables) {
     const card = state.cards[id];
     const def = defOf(card);
-    if (def.types.includes('Land')) continue;
+    if (def.types.includes('Land') || def.cannotCast) continue;
     const instantSpeed = def.types.includes('Instant') || (def.keywords ?? []).includes('Flash');
     if (!instantSpeed && !sorcery) continue;
-    const targets = specViews(state, def.targets, pid, id);
-    if (!targets) continue;
+    let sacrificeOptions: CardId[] | undefined;
+    if (def.castSacrifice) {
+      sacrificeOptions = battlefieldCards(state)
+        .filter((c) => c.controller === pid && matchesFilter(state, c, def.castSacrifice, pid, id))
+        .map((c) => c.id);
+      if (!sacrificeOptions.length) continue;
+    }
     const base = parseCost(def.cost);
+    let xMax: number | undefined;
     if (base.x > 0) {
-      let xMax = -1;
+      xMax = -1;
       for (let x = 0; x <= 30; x++) {
         if (canPay(state, pid, spellCost(state, card, x))) xMax = x;
         else break;
       }
       if (xMax < 0) continue;
-      out.push({ type: 'cast', cardId: id, label: `Cast ${def.name}`, targets, xMax });
-    } else {
-      if (!canPay(state, pid, spellCost(state, card, 0))) continue;
-      out.push({ type: 'cast', cardId: id, label: `Cast ${def.name}`, targets });
+    } else if (!canPay(state, pid, spellCost(state, card, 0))) continue;
+    const extra = { xMax, sacrificeOptions, sacrificeLabel: sacrificeOptions ? 'Sacrifice (additional cost)' : undefined };
+    if (def.modes) {
+      for (const combo of modeCombos(def.modes.length, def.modeCount ?? 1)) {
+        const targets = specViews(state, combo.flatMap((m) => def.modes![m].targets), pid, id);
+        if (!targets) continue;
+        const label = `Cast ${def.name}: ${combo.map((m) => def.modes![m].text.replace(/^•\s*/, '')).join(' + ')}`;
+        out.push({ type: 'cast', cardId: id, label, targets, modes: combo, ...extra });
+      }
+      continue;
     }
+    const targets = specViews(state, def.targets, pid, id);
+    if (!targets) continue;
+    out.push({ type: 'cast', cardId: id, label: `Cast ${def.name}`, targets, ...extra });
   }
 
   for (const card of battlefieldCards(state)) {
     if (card.controller !== pid) continue;
     defOf(card).abilities?.forEach((ab, i) => {
       if (ab.mana) {
-        if (!ab.cost.mana && !ab.cost.sacrifice && (!ab.cost.tap || canUseTap(state, card))) {
-          out.push({ type: 'manaTap', cardId: card.id, ability: i, label: ab.text, targets: [], manaColors: abilityColors(state, pid, ab) });
+        if (!ab.cost.mana && !ab.cost.sacrifice) {
+          if ((!ab.cost.tap || canUseTap(state, card)) && (!ab.cost.life || p.life >= ab.cost.life)) {
+            out.push({ type: 'manaTap', cardId: card.id, ability: i, label: ab.text, targets: [], manaColors: ab.mana.fixed ? undefined : abilityColors(state, pid, ab) });
+          }
+        } else {
+          // Mana abilities with extra costs (Signets, sacrifice outlets) are activated by hand and resolve immediately.
+          const a = abilityAction(state, pid, card, i, ab, true);
+          if (a) out.push({ ...a, isMana: true, manaColors: ab.mana.fixed ? undefined : abilityColors(state, pid, ab) });
         }
         return;
       }
@@ -163,6 +207,16 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
       if (a) out.push(a);
     });
   }
+  return out;
+}
+
+function modeCombos(n: number, k: number): number[][] {
+  const out: number[][] = [];
+  const rec = (start: number, acc: number[]) => {
+    if (acc.length === k) return void out.push(acc);
+    for (let i = start; i < n; i++) rec(i + 1, [...acc, i]);
+  };
+  rec(0, []);
   return out;
 }
 
@@ -262,14 +316,24 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
   }
 
   if (action.type === 'cast') {
-    const a = legal.find((l) => l.type === 'cast' && l.cardId === action.cardId);
+    const modesKey = (m?: number[]) => (m ?? []).join(',');
+    const a = legal.find((l) => l.type === 'cast' && l.cardId === action.cardId && modesKey(l.modes) === modesKey(action.modes));
     if (!a) throw new RulesError("Can't cast that now");
     const card = state.cards[action.cardId];
     const def = defOf(card);
     const targets = validateTargets(a.targets, action.targets);
     const x = a.xMax !== undefined ? Math.max(0, Math.min(action.x ?? 0, a.xMax)) : 0;
+    if (a.sacrificeOptions && (!action.sacrifice || !a.sacrificeOptions.includes(action.sacrifice))) {
+      throw new RulesError('Choose a permanent to sacrifice');
+    }
     const fromCommand = card.zone === 'command';
     pay(state, pid, spellCost(state, card, x));
+    let sacrificed: Snapshot | undefined;
+    if (a.sacrificeOptions) {
+      const sc = state.cards[action.sacrifice!];
+      sacrificed = snapshot(state, sc);
+      moveCard(state, sc.id, 'graveyard');
+    }
     if (fromCommand) p.commanderCasts[card.id] = (p.commanderCasts[card.id] ?? 0) + 1;
     moveCard(state, card.id, 'stack', { controller: pid });
     card.x = x;
@@ -280,12 +344,15 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       cardId: card.id,
       def: def.name,
       targets,
-      text: def.text ?? '',
+      text: a.modes ? a.label.replace(/^Cast [^:]+: /, '') : def.text ?? '',
       x,
+      sacrificed,
+      modes: a.modes,
     });
-    log(state, `${p.name} casts ${def.name}${x ? ` (X=${x})` : ''}${describeTargets(state, targets)}.`);
+    log(state, `${p.name} casts ${def.name}${a.modes ? ` (${a.label.replace(/^Cast [^:]+: /, '')})` : ''}${x ? ` (X=${x})` : ''}${describeTargets(state, targets)}.`);
     pushEvent(state, { t: 'cast', card: card.id, controller: pid, def: def.name });
     state.passes = [];
+    p.holding = !!action.hold;
     return;
   }
 
@@ -314,6 +381,15 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       sacrificed = sacrificed ?? sourceSnap;
       moveCard(state, card.id, 'graveyard');
     }
+    if (ab.mana) {
+      // Mana abilities don't use the stack.
+      const colors = abilityColors(state, pid, ab);
+      const sym = action.color && colors.includes(action.color) ? action.color : colors[0];
+      if (ab.mana.fixed) for (const s of ab.mana.fixed) p.manaPool[s]++;
+      else p.manaPool[sym] += ab.mana.amount ?? 1;
+      if (ab.mana.pain) loseLife(state, pid, ab.mana.pain);
+      return;
+    }
     state.stack.push({
       id: newId(state, 's'),
       kind: 'ability',
@@ -329,6 +405,7 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     });
     log(state, `${p.name} activates ${def.name}: ${ab.text}${describeTargets(state, targets)}.`);
     state.passes = [];
+    p.holding = !!action.hold;
     return;
   }
   throw new RulesError('Unknown action');
@@ -344,6 +421,7 @@ function describeTargets(state: GameState, targets: (Target | null)[]): string {
 }
 
 function doPass(state: GameState, pid: PlayerId): void {
+  getPlayer(state, pid).holding = false;
   state.passes.push(pid);
   const alive = alivePlayers(state);
   if (alive.every((pl) => state.passes.includes(pl.id))) {
@@ -496,6 +574,14 @@ const HANDLERS: Record<string, Handler> = {
     const ability = kind === 'ability' ? def.abilities![index] : getTrigger(init.def, index);
     ability.effect?.(makeCtx(state, init));
   },
+  'core:shock': (state, d, a) => {
+    const c = state.cards[d.data.card];
+    if (!c || c.inc !== d.data.inc || c.zone !== 'battlefield') return;
+    if (a.option === 'pay') {
+      loseLife(state, d.player, 2);
+      log(state, `${getPlayer(state, d.player).name} pays 2 life for ${c.def}.`);
+    } else c.tapped = true;
+  },
   'core:commanderZone': (state, d, a) => {
     const c = state.cards[d.data.card];
     if (a.option !== 'yes' || !c || c.inc !== d.data.inc) return;
@@ -509,6 +595,16 @@ const HANDLERS: Record<string, Handler> = {
   'core:sacrifice': (state, d, a) => {
     for (const id of a.cards!) if (state.cards[id]?.zone === 'battlefield') moveCard(state, id, 'graveyard');
     log(state, `${getPlayer(state, d.player).name} sacrifices ${a.cards!.map((id) => state.cards[id]?.def ?? 'a token').join(', ')}.`);
+  },
+  'core:orderTrigger': (state, d, a) => {
+    const mine = state.pendingTriggers.filter((t) => t.controller === d.data.controller);
+    const pick = mine[Number(a.option)];
+    if (!pick) return;
+    state.pendingTriggers = [pick, ...state.pendingTriggers.filter((t) => t !== pick)];
+    pick.chosen = true;
+  },
+  'core:bounceChosen': (state, _d, a) => {
+    for (const id of a.cards!) if (state.cards[id]?.zone === 'battlefield') moveCard(state, id, 'hand');
   },
   'core:discard': (state, d, a) => {
     log(state, `${getPlayer(state, d.player).name} discards ${a.cards!.map((id) => state.cards[id].def).join(', ')}.`);
@@ -597,9 +693,12 @@ function mulliganDecision(state: GameState, pid: PlayerId): Omit<Decision, 'id'>
 
 function shouldAutoPass(state: GameState, pid: PlayerId): boolean {
   const p = getPlayer(state, pid);
-  const meaningful = legalActions(state, pid).filter((a) => a.type !== 'manaTap');
-  if (meaningful.length === 0) return true;
   const top = state.stack[state.stack.length - 1];
+  if (p.holding) return false;
+  if (!p.isBot && p.autoPass === 'none') return false;
+  if (!p.isBot && p.autoPass === 'stack' && top && top.controller !== pid) return false;
+  const meaningful = legalActions(state, pid).filter((a) => a.type !== 'manaTap' && !a.isMana);
+  if (meaningful.length === 0) return true;
   if (p.passUntilTurn === state.turn) {
     // Only stop if an opponent puts something on the stack.
     if (!top || top.controller === pid) return true;
@@ -656,9 +755,12 @@ export function run(state: GameState): void {
 export interface PlayerConfig {
   id: PlayerId;
   name: string;
-  commander: string;
+  /** One commander, or two partners. */
+  commander: string | string[];
   cards: string[];
   isBot?: boolean;
+  /** Preferred image per card name (chosen printing). */
+  art?: Record<string, string>;
 }
 
 export function createGame(players: PlayerConfig[], seed = Date.now() % 2147483647): GameState {
@@ -716,12 +818,16 @@ export function createGame(players: PlayerConfig[], seed = Date.now() % 21474836
   }
   for (const cfg of order) {
     const p = getPlayer(state, cfg.id);
-    const cmd = makeCard(state, cfg.commander, p.id, 'command');
-    cmd.commander = true;
-    p.command.push(cmd.id);
-    p.commanders.push(cmd.id);
+    for (const name of Array.isArray(cfg.commander) ? cfg.commander : [cfg.commander]) {
+      const cmd = makeCard(state, name, p.id, 'command');
+      cmd.commander = true;
+      cmd.art = cfg.art?.[name];
+      p.command.push(cmd.id);
+      p.commanders.push(cmd.id);
+    }
     for (const name of cfg.cards) {
       const c = makeCard(state, name, p.id, 'library');
+      c.art = cfg.art?.[name];
       p.library.push(c.id);
     }
     shuffle(state, p.library);

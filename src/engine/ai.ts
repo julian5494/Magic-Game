@@ -160,10 +160,17 @@ function castBest(state: GameState, pid: PlayerId, legal: PlayableAction[], inst
     if (def.ai?.holdForInstant) continue;
     if (def.ai?.value === -1 && theirCreatures < myCreatures + 2) continue;
     if (def.targets?.some((t) => t.kind === 'spell')) continue;
+    if (def.unsupported?.length && !def.effect && !def.modes && (def.types.includes('Instant') || def.types.includes('Sorcery'))) continue;
     if (def.name === 'Dark Ritual') continue;
-    const targets = pickTargets(state, pid, a.targets, def.targets);
+    const specs = a.modes && def.modes ? a.modes.flatMap((m) => def.modes![m].targets) : def.targets;
+    const targets = pickTargets(state, pid, a.targets, specs);
     if (!targets) continue;
-    const action: Action = { type: 'cast', cardId: a.cardId, targets };
+    const action: Action = { type: 'cast', cardId: a.cardId, targets, modes: a.modes };
+    if (a.sacrificeOptions) {
+      const cheap = lowestValue(state, a.sacrificeOptions, 1)[0];
+      if (!cheap || state.cards[cheap].commander) continue;
+      action.sacrifice = cheap;
+    }
     if (a.xMax !== undefined) {
       if (a.xMax < 2) continue;
       action.x = a.xMax;

@@ -252,3 +252,28 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .small-modal .modal-actions { justify-content: center; }
 .modal-peek { position: fixed; bottom: 230px; left: 50%; transform: translateX(-50%); z-index: 70; }
 .x-value { font-size: 22px; font-weight: 800; margin: 8px; }
+
+/* ---------- Priority, warnings, deck import ---------- */
+.pass-chip { font-size: 10px; padding: 1px 7px; border-radius: 10px; background: #34405c; color: #c8d2e8; margin-left: auto; margin-right: 8px; }
+.pass-chip.passed { background: #1f4d3a; color: #9ff0c7; }
+.pass-chip.deciding { background: #5a4415; color: #ffd98a; }
+.warn-badge { position: absolute; bottom: 4px; left: 4px; width: 16px; height: 16px; border-radius: 50%; background: #d39b1e; color: #1b1305; font-weight: 900; font-size: 11px; display: grid; place-items: center; border: 1px solid #0006; }
+.warn-badge.blocked { background: var(--danger); color: #fff; }
+.preview-warn { margin-top: 6px; font-size: 11.5px; color: #ffcf7a; }
+.preview-warn ul { margin: 2px 0 0; padding-left: 16px; color: #e8c88e; }
+.deck-report { margin-top: 12px; }
+.cmd-pick { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button.active { border-color: var(--accent); color: var(--accent); }
+.coverage { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.cov-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: #0d1220; }
+.cov-auto { background: var(--ok); }
+.cov-partial { background: #d39b1e; }
+.cov-blocked { background: var(--danger); }
+.cov-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; }
+.cov-dot.auto { background: var(--ok); }
+.cov-dot.partial { background: #d39b1e; }
+.cov-dot.blocked { background: var(--danger); }
+.cov-list { max-height: 220px; overflow: auto; padding-left: 18px; color: #c8d2e8; }
+.blocked-text { color: #ff9a9e; }
+.settings select { font-size: 12px; padding: 2px 6px; }

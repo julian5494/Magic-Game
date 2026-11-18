@@ -63,6 +63,8 @@ export interface Ctx {
   controllerOf(target: Target | null): PlayerId | null;
 
   damage(to: Target | CardId | PlayerId | null, amount: number): void;
+  /** Damage dealt by another permanent (bite effects). */
+  damageFrom(source: CardId, to: Target | CardId | PlayerId | null, amount: number): void;
   draw(player: PlayerId, n: number): void;
   gainLife(player: PlayerId, n: number): void;
   loseLife(player: PlayerId, n: number): void;
@@ -85,6 +87,8 @@ export interface Ctx {
   /** Queue a choice: each listed player sacrifices N permanents matching filter. */
   eachSacrifices(players: PlayerId[], filter: CardFilter, n: number): void;
   discard(player: PlayerId, n: number): void;
+  /** The player chooses N of their permanents matching filter and returns them to hand (not targeted). */
+  chooseAndBounce(player: PlayerId, filter: CardFilter, n: number): void;
   discardRandom(player: PlayerId, n: number): void;
   search(opts: {
     player?: PlayerId;
@@ -110,6 +114,10 @@ export type Effect = (ctx: Ctx) => void;
 export interface ManaAbilityDef {
   colors: ManaSym[] | 'any' | 'identity';
   amount?: number;
+  /** Produces exactly these symbols together (eg. bounce lands: {R}{W}). Overrides colors/amount. */
+  fixed?: ManaSym[];
+  /** Life lost when this ability is used (painlands). */
+  pain?: number;
 }
 
 export interface Cost {
@@ -152,7 +160,10 @@ export type TriggerOn =
   | 'otherCreatureYouControlDies'
   | 'creatureYouControlAttacks'
   | 'becomesTapped'
-  | 'equippedCreatureDies';
+  | 'equippedCreatureDies'
+  | 'equippedCreatureAttacks'
+  | 'anyEtb' // any permanent enters (use `condition` to narrow)
+  | 'anyDies'; // any creature dies (use `condition` to narrow)
 
 export interface TriggeredAbility {
   on: TriggerOn;
@@ -191,10 +202,31 @@ export interface CardDef {
   targets?: TargetSpec[];
   /** Instant/sorcery resolution. */
   effect?: Effect;
+  /** Modal spells ("Choose one —"). Each mode has its own targets and effect. */
+  modes?: { text: string; targets: TargetSpec[]; effect: Effect }[];
+  /** How many modes are chosen (default 1). */
+  modeCount?: number;
+  /** Unparsed text includes a drawback, so the card can't be played (rather than played without it). */
+  cannotCast?: boolean;
+  /** "As an additional cost to cast this spell, sacrifice a ..." */
+  castSacrifice?: CardFilter;
   abilities?: ActivatedAbility[];
   triggers?: TriggeredAbility[];
   statics?: StaticAbility[];
   entersTapped?: boolean;
+  /** Conditional "enters tapped unless ..." checked as the permanent enters. */
+  entersTappedIf?: (state: GameState, controller: PlayerId) => boolean;
+  /** Shock lands: "you may pay 2 life. If you don't, it enters tapped." */
+  shockLand?: boolean;
+  /** Commander eligibility beyond "legendary creature", and partner-style pairing. */
+  canBeCommander?: boolean;
+  partner?: 'partner' | 'friends' | 'chooseBackground' | 'background' | { with: string };
+  /** Oracle text the engine doesn't automate (shown on the card, never done manually). */
+  unsupported?: string[];
+  /** Default card image (from Scryfall). */
+  image?: string;
+  /** Banned in Commander according to Scryfall. */
+  banned?: boolean;
   /** Equip cost; creates an equip activated ability automatically. */
   equip?: string;
   token?: boolean;

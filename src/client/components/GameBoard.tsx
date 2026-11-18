@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Action, CardId, PlayableAction, PlayerId, Target, TargetSpecView } from '../../engine/types';
+import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, Target, TargetSpecView } from '../../engine/types';
 import type { CardView, GameView, StackView } from '../../engine/view';
 import type { ClientMessage } from '../../shared/protocol';
 import type { NetState } from '../net';
@@ -12,6 +12,7 @@ interface Pending {
   x?: number;
   sacrifice?: CardId;
   targets: (Target | null)[];
+  color?: ManaSym;
 }
 
 interface Menu {
@@ -32,6 +33,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [selBlocker, setSelBlocker] = useState<CardId | null>(null);
   const [trigTargets, setTrigTargets] = useState<(Target | null)[]>([]);
   const [, forceRender] = useState(0);
+  const [hold, setHold] = useState(false);
 
   const act = useCallback((action: Action) => send({ t: 'action', action }), [send]);
   const decision = view.decision;
@@ -77,8 +79,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   const finishPending = (p: Pending) => {
     const a = p.action;
-    if (a.type === 'cast') act({ type: 'cast', cardId: a.cardId, targets: p.targets, x: p.x, sacrifice: p.sacrifice });
-    else if (a.type === 'activate') act({ type: 'activate', cardId: a.cardId, ability: a.ability!, targets: p.targets, x: p.x, sacrifice: p.sacrifice });
+    if (a.type === 'cast') act({ type: 'cast', cardId: a.cardId, targets: p.targets, x: p.x, sacrifice: p.sacrifice, modes: a.modes, hold });
+    else if (a.type === 'activate') {
+      act({ type: 'activate', cardId: a.cardId, ability: a.ability!, targets: p.targets, x: p.x, sacrifice: p.sacrifice, color: p.color, hold: a.isMana ? undefined : hold });
+    }
     setPending(null);
   };
 
@@ -105,11 +109,11 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     }
   };
 
-  const startAction = (a: PlayableAction) => {
+  const startAction = (a: PlayableAction, color?: ManaSym) => {
     setMenu(null);
     if (a.type === 'playLand') return act({ type: 'playLand', cardId: a.cardId });
-    if (a.type === 'manaTap') return act({ type: 'manaTap', cardId: a.cardId, ability: a.ability!, color: a.manaColors?.[0] });
-    const p: Pending = { action: a, stage: a.xMax !== undefined ? 'x' : a.sacrificeOptions ? 'sacrifice' : 'targets', targets: [] };
+    if (a.type === 'manaTap') return act({ type: 'manaTap', cardId: a.cardId, ability: a.ability!, color: color ?? a.manaColors?.[0] });
+    const p: Pending = { action: a, stage: a.xMax !== undefined ? 'x' : a.sacrificeOptions ? 'sacrifice' : 'targets', targets: [], color };
     if (p.stage === 'targets' && a.targets.length === 0) return finishPending(p);
     setPending(p);
   };
@@ -120,10 +124,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const acts = actionsFor(id);
     const items: Menu['items'] = [];
     for (const a of acts) {
-      if (a.type === 'manaTap' && a.manaColors && a.manaColors.length > 1) {
-        for (const c of a.manaColors) items.push({ label: `Add {${c}}`, run: () => act({ type: 'manaTap', cardId: id, ability: a.ability!, color: c }) });
+      if ((a.type === 'manaTap' || a.isMana) && a.manaColors && a.manaColors.length > 1) {
+        for (const c of a.manaColors) items.push({ label: `${a.isMana ? a.label.split(':')[0] + ': ' : ''}Add {${c}}`, run: () => startAction(a, c) });
       } else {
-        items.push({ label: a.type === 'cast' ? `Cast ${view.cards[id]?.name}` : a.label, run: () => startAction(a) });
+        items.push({ label: a.type === 'cast' && !a.modes ? `Cast ${view.cards[id]?.name}` : a.label, run: () => startAction(a) });
       }
     }
     if (items.length === 1 && !(acts[0].type === 'manaTap' && (acts[0].manaColors?.length ?? 0) > 1)) return startAction(acts[0]);
@@ -195,7 +199,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   const cardProps = (id: CardId) => {
     const c = view.cards[id];
-    const legal = !targeting && !sacrificing && !decision && actionsFor(id).some((a) => a.type !== 'manaTap');
+    const legal = !targeting && !sacrificing && !decision && actionsFor(id).some((a) => a.type !== 'manaTap' && !a.isMana);
     let selectable = legal;
     let selected = false;
     let badge: string | undefined;
@@ -350,8 +354,16 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
             ))}
           </div>
           <div className="settings">
-            <label title="Stop at every step instead of auto-passing when you have nothing relevant to do">
-              <input type="checkbox" checked={meView.autoPass === 'none'} onChange={(e) => act({ type: 'setAutoPass', mode: e.target.checked ? 'none' : 'smart' })} /> Full control
+            <label title="When the game should stop and give you priority">
+              Stops:{' '}
+              <select value={meView.autoPass} onChange={(e) => act({ type: 'setAutoPass', mode: e.target.value as AutoPassMode })}>
+                <option value="smart">Smart (skip when I can't respond)</option>
+                <option value="stack">Every spell & ability opponents use</option>
+                <option value="none">Full control (every step)</option>
+              </select>
+            </label>
+            <label title="After you cast a spell or activate an ability, keep priority so you can respond to it yourself">
+              <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} /> Hold priority
             </label>
             <label>
               <input

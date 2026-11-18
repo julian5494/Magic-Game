@@ -103,7 +103,7 @@ export function buildPrecon(id: string): DeckList {
   const basics = 99 - cards.length;
   if (basics < 0) throw new Error(`${p.name} has too many cards`);
   for (let i = 0; i < basics; i++) cards.push(BASIC_FOR[colors[i % colors.length]]);
-  return { commander: p.commander, cards };
+  return { commanders: [p.commander], cards };
 }
 
 export function preconText(id: string): string {

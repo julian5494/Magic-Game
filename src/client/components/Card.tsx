@@ -58,6 +58,7 @@ export interface CardProps {
 export function Card({ card, size = 'medium', selectable, selected, attacking, blocking, dim, badge, onClick, onHover, showTapped = true }: CardProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const useImage = imagesEnabled() && !card.token && !imgFailed;
+  const src = card.image ?? imageUrl(card.name);
   const tapped = showTapped && card.tapped;
   const buffed = card.power !== undefined && card.basePower !== undefined && (card.power > card.basePower || (card.toughness ?? 0) > (card.baseToughness ?? 0));
   const debuffed = card.power !== undefined && card.basePower !== undefined && (card.power < card.basePower || (card.toughness ?? 0) < (card.baseToughness ?? 0));
@@ -81,7 +82,7 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
       title={size === 'tiny' ? card.name : undefined}
     >
       {useImage ? (
-        <img className="card-img" src={imageUrl(card.name)} alt={card.name} loading="lazy" onError={() => setImgFailed(true)} draggable={false} />
+        <img className="card-img" src={src} alt={card.name} loading="lazy" onError={() => setImgFailed(true)} draggable={false} />
       ) : (
         <div className={`card-frame ${frameClass(card)}`}>
           <div className="card-title">
@@ -117,6 +118,11 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
         <div className="sick-badge" title="Summoning sick">z</div>
       )}
       {card.attachments.length > 0 && <div className="attach-badge" title="Has attachments">⚔{card.attachments.length}</div>}
+      {(card.unsupported || card.cannotCast) && (
+        <div className={`warn-badge ${card.cannotCast ? 'blocked' : ''}`} title={card.cannotCast ? "Can't be played yet" : 'Some abilities are not automated'}>
+          !
+        </div>
+      )}
       {badge && <div className="order-badge">{badge}</div>}
     </div>
   );
@@ -127,7 +133,7 @@ export function CardPreview({ card }: { card: CardView }) {
   const useImage = imagesEnabled() && !card.token && !imgFailed;
   return (
     <div className="preview">
-      {useImage && <img src={imageUrl(card.name)} alt={card.name} onError={() => setImgFailed(true)} />}
+      {useImage && <img src={card.image ?? imageUrl(card.name)} alt={card.name} onError={() => setImgFailed(true)} />}
       <div className="preview-text">
         <div className="card-title">
           <strong>{card.name}</strong>
@@ -147,6 +153,17 @@ export function CardPreview({ card }: { card: CardView }) {
         )}
         {card.keywords.length > 0 && <div className="preview-kw">{card.keywords.join(', ')}</div>}
         {card.commanderTax ? <div className="preview-kw">Commander tax: +{card.commanderTax}</div> : null}
+        {card.cannotCast && <div className="preview-warn">This card can't be played yet: the game can't enforce all of its rules.</div>}
+        {card.unsupported && (
+          <div className="preview-warn">
+            Not automated (these won't happen):
+            <ul>
+              {card.unsupported.map((u, i) => (
+                <li key={i}>{u}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );

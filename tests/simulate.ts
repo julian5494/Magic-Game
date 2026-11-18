@@ -4,7 +4,7 @@ import type { GameState } from '../src/engine';
 export function simulate(seed: number, decks: string[], maxActions = 6000): { state: GameState; actions: number } {
   const players = decks.map((id, i) => {
     const d = buildPrecon(id);
-    return { id: `p${i}`, name: `Bot ${i} (${id})`, commander: d.commander, cards: d.cards, isBot: true };
+    return { id: `p${i}`, name: `Bot ${i} (${id})`, commander: d.commanders, cards: d.cards, isBot: true };
   });
   let state = createGame(players, seed);
   let n = 0;
