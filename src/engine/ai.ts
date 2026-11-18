@@ -117,9 +117,10 @@ function choosePlay(state: GameState, pid: PlayerId): Action | null {
   const cast = castBest(state, pid, legal, false);
   if (cast) return cast;
   for (const a of legal.filter((l) => l.type === 'activate')) {
+    if (a.ability! >= 1000 || a.isMana) continue; // cycling / mana abilities with costs: bots skip them
     const card = state.cards[a.cardId];
     const ab = defOf(card).abilities![a.ability!];
-    if (!ab.aiValue || ab.cost.sacrifice) continue;
+    if (!ab || !ab.aiValue || ab.cost.sacrifice) continue;
     if (ab.equip && card.attachedTo) continue;
     const targets = pickTargets(state, pid, a.targets, ab.targets);
     if (!targets) continue;
@@ -162,10 +163,11 @@ function castBest(state: GameState, pid: PlayerId, legal: PlayableAction[], inst
     if (def.targets?.some((t) => t.kind === 'spell')) continue;
     if (def.unsupported?.length && !def.effect && !def.modes && (def.types.includes('Instant') || def.types.includes('Sorcery'))) continue;
     if (def.name === 'Dark Ritual') continue;
-    const specs = a.modes && def.modes ? a.modes.flatMap((m) => def.modes![m].targets) : def.targets;
+    const variant = a.variant !== undefined ? def.castVariants?.[a.variant] : undefined;
+    const specs = variant?.targets ?? (a.modes && def.modes ? a.modes.flatMap((m) => def.modes![m].targets) : def.targets);
     const targets = pickTargets(state, pid, a.targets, specs);
     if (!targets) continue;
-    const action: Action = { type: 'cast', cardId: a.cardId, targets, modes: a.modes };
+    const action: Action = { type: 'cast', cardId: a.cardId, targets, modes: a.modes, variant: a.variant };
     if (a.sacrificeOptions) {
       const cheap = lowestValue(state, a.sacrificeOptions, 1)[0];
       if (!cheap || state.cards[cheap].commander) continue;

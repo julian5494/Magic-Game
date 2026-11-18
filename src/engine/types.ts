@@ -16,7 +16,7 @@ export type Supertype = 'Legendary' | 'Basic';
 export type Keyword =
   | 'Flying' | 'Reach' | 'Trample' | 'Haste' | 'Vigilance' | 'Deathtouch' | 'Lifelink'
   | 'First strike' | 'Double strike' | 'Menace' | 'Defender' | 'Hexproof' | 'Shroud'
-  | 'Indestructible' | 'Flash' | 'Prowess' | 'Exalted' | 'Unblockable';
+  | 'Indestructible' | 'Flash' | 'Prowess' | 'Exalted' | 'Unblockable' | 'CantBlock' | 'CantAttack';
 
 export type ZoneName = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'command' | 'stack';
 
@@ -63,6 +63,8 @@ export interface CardInstance {
   x?: number;
   /** Image of the chosen printing. */
   art?: string;
+  /** Turn on which each once-per-turn ability (key) was last used. */
+  usedOnTurn?: Record<string, number>;
 }
 
 export interface Player {
@@ -121,6 +123,10 @@ export interface StackItem {
   x?: number;
   sacrificed?: Snapshot;
   modes?: number[];
+  /** Index into def.castVariants (kicker, flashback, overload, ...). */
+  variant?: number;
+  /** Copies of spells (storm, "copy target spell") aren't cards. */
+  isCopy?: boolean;
 }
 
 export interface Snapshot {
@@ -147,7 +153,9 @@ export type GameEvent =
   | { t: 'combatDamagePlayer'; source: CardId; player: PlayerId; amount: number }
   | { t: 'step'; step: Step; active: PlayerId }
   | { t: 'tapped'; card: CardId }
-  | { t: 'draw'; player: PlayerId };
+  | { t: 'draw'; player: PlayerId }
+  | { t: 'discard'; player: PlayerId; card: CardId }
+  | { t: 'attackDeclared'; player: PlayerId; count: number };
 
 export interface PendingTrigger {
   source: CardId;
@@ -248,12 +256,16 @@ export interface GameState {
   /** Snapshots of permanents that left the battlefield during the current event batch. */
   recentlyLeft: Snapshot[];
   startingLife: number;
+  /** Spells cast this turn (for storm). */
+  spellsThisTurn?: number;
+  /** The monarch draws an extra card at their end step; dealing combat damage to them steals it. */
+  monarch?: PlayerId | null;
 }
 
 export type Action =
   | { type: 'pass' }
   | { type: 'playLand'; cardId: CardId }
-  | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; modes?: number[]; hold?: boolean }
+  | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; modes?: number[]; hold?: boolean; variant?: number }
   | { type: 'activate'; cardId: CardId; ability: number; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; color?: ManaSym; hold?: boolean }
   | { type: 'manaTap'; cardId: CardId; ability: number; color?: ManaSym }
   | { type: 'decide'; decisionId: string; answer: DecisionAnswer }
@@ -278,4 +290,6 @@ export interface PlayableAction {
   modes?: number[];
   /** Mana ability with an extra cost (resolves immediately, no stack). */
   isMana?: boolean;
+  /** Cast variant (kicker, flashback, ...). */
+  variant?: number;
 }

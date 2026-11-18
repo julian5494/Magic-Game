@@ -102,6 +102,15 @@ export interface Ctx {
   }): void;
   /** Scry N; if `then` is given, continue in def.handlers[then] after the scry. */
   scry(player: PlayerId, n: number, then?: string): void;
+  surveil(player: PlayerId, n: number, then?: string): void;
+  proliferate(): void;
+  /** Ask `player` to pay `cost`; if they don't (or can't), run def.handlers[failKey]. */
+  unlessPays(player: PlayerId, cost: string, failKey: string, data?: any): void;
+  /** Copy a spell on the stack (same targets). */
+  copySpell(stackId: string | null, newController?: PlayerId): void;
+  /** Add N mana of one color the player chooses (from `colors`). */
+  addManaChoice(player: PlayerId, n: number, colors: ManaSym[] | 'any' | 'identity'): void;
+  becomeMonarch(player: PlayerId): void;
   /** Look at the top N cards and choose up to `max` matching `filter` to put in hand; rest on bottom. */
   lookAndTake(player: PlayerId, n: number, max: number, filter: CardFilter | null, label: string): void;
   /** Ask a yes/no or multiple-choice question, continue in def.handlers[key]. */
@@ -140,6 +149,12 @@ export interface ActivatedAbility {
   equip?: boolean;
   /** AI hint: how desirable this activation is (0 = never by itself). */
   aiValue?: number;
+  /** "Activate only if ..." */
+  condition?: (state: GameState, self: CardInstance) => boolean;
+  /** "Activate only once each turn." */
+  onceEachTurn?: boolean;
+  /** "Activate only during your turn." */
+  yourTurnOnly?: boolean;
 }
 
 export type TriggerOn =
@@ -162,6 +177,22 @@ export type TriggerOn =
   | 'becomesTapped'
   | 'equippedCreatureDies'
   | 'equippedCreatureAttacks'
+  | 'eachUpkeep'
+  | 'eachEndStep'
+  | 'opponentEndStep'
+  | 'yourDrawStep'
+  | 'yourBeginCombat'
+  | 'eachBeginCombat'
+  | 'youDraw'
+  | 'opponentDraws'
+  | 'opponentCasts'
+  | 'anyPlayerCasts'
+  | 'youAttack'
+  | 'castSelf'
+  | 'youDiscard'
+  | 'creatureYouControlDealsCombatDamageToPlayer'
+  | 'equippedCreatureDealsCombatDamageToPlayer'
+  | 'enchantedCreatureAttacks'
   | 'anyEtb' // any permanent enters (use `condition` to narrow)
   | 'anyDies'; // any creature dies (use `condition` to narrow)
 
@@ -174,15 +205,34 @@ export interface TriggeredAbility {
   targets?: TargetSpec[];
   optional?: boolean;
   effect: Effect;
+  /** "This ability triggers only once each turn." */
+  onceEachTurn?: boolean;
 }
 
 export type StaticAbility =
   | { kind: 'anthem'; filter: CardFilter; power: number; toughness: number; keywords?: Keyword[] }
   | { kind: 'attached'; power?: number; toughness?: number; keywords?: Keyword[]; cantAttackOrBlock?: boolean }
   | { kind: 'noMaxHandSize' }
+  | { kind: 'extraLand'; n: number }
   | { kind: 'preventNoncombatDamageToOtherCreatures' }
   | { kind: 'cantBeCountered' }
   | { kind: 'oppsCantMakeYouSacrifice' };
+
+export interface CastVariant {
+  label: string;
+  /** Replaces the mana cost ('{0}' = free). Undefined keeps the normal cost. */
+  cost?: string;
+  /** Added to the cost (kicker). */
+  extraCost?: string;
+  zone: 'hand' | 'graveyard';
+  /** Exile the card instead of putting it into the graveyard (flashback). */
+  exileAfter?: boolean;
+  /** Replacement targets/effect; undefined uses the card's normal ones. */
+  targets?: TargetSpec[];
+  effect?: Effect;
+  /** Only castable when this holds (eg. "if you control a commander"). */
+  condition?: (state: GameState, controller: PlayerId) => boolean;
+}
 
 export interface CardDef {
   name: string;
@@ -206,8 +256,20 @@ export interface CardDef {
   modes?: { text: string; targets: TargetSpec[]; effect: Effect }[];
   /** How many modes are chosen (default 1). */
   modeCount?: number;
+  /** "enters with N counters on it" (n 'X' = the X paid). */
+  etbCounters?: { kind: string; n: number | 'X' };
   /** Unparsed text includes a drawback, so the card can't be played (rather than played without it). */
   cannotCast?: boolean;
+  /** Other ways to cast: kicker, flashback, overload, "free if you control a commander", ... */
+  castVariants?: CastVariant[];
+  /** Abilities usable while the card is in your hand (cycling); paying includes discarding it. */
+  handAbilities?: ActivatedAbility[];
+  /** "As an additional cost to cast this spell, discard a card." */
+  castDiscard?: number;
+  /** Ward {N}: spells/abilities opponents target this with are countered unless they pay. */
+  ward?: string;
+  /** Storm: copy this spell for each spell cast before it this turn. */
+  storm?: boolean;
   /** "As an additional cost to cast this spell, sacrifice a ..." */
   castSacrifice?: CardFilter;
   abilities?: ActivatedAbility[];

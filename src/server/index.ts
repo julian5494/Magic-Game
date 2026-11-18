@@ -5,6 +5,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { cardPool, PRECONS } from '../engine';
 import type { ClientMessage, ServerMessage } from '../shared/protocol';
+import { loadBulk } from './bulk';
 import { type Client, Lobby } from './rooms';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -208,3 +209,8 @@ setInterval(() => lobby.cleanup(), 60_000).unref();
 server.listen(PORT, () => {
   console.log(`Commander Arena server listening on http://localhost:${PORT}`);
 });
+
+// Load every card from Scryfall's bulk data in the background (downloads ~25 MB once a week).
+loadBulk()
+  .then((n) => console.log(`Card database ready: ${n} cards`))
+  .catch((e) => console.warn('Card database unavailable; decks will be looked up card by card:', (e as Error).message));

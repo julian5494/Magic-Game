@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import type { CardDef } from '../engine/cardtypes';
 import { convertScryfall, type ScryCard } from '../engine/oracle';
 import { findDef, normalizeName, registerAlias, registerGenerated } from '../engine/registry';
+import { bulkCard } from './bulk';
 
 const CACHE_FILE = resolve(process.env.CARD_CACHE ?? '.cache/scryfall-cards.json');
 const HEADERS = { 'User-Agent': 'CommanderArena/0.1', Accept: 'application/json', 'Content-Type': 'application/json' };
@@ -123,7 +124,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
     if (seen.has(k)) continue;
     seen.add(k);
     const printing = printingOf(r);
-    const byName = cache.get(normalizeName(r.name));
+    const byName = cache.get(normalizeName(r.name)) ?? bulkCard(r.name);
     if (printing || (byName && (!keyOf(r) || cache.has(keyOf(r)!)))) continue;
     pending.push(r);
   }
@@ -131,7 +132,14 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
   for (let i = 0; i < pending.length; i += 75) {
     const chunk = pending.slice(i, i + 75);
     const ids = chunk.map((r) => (r.set && r.cn ? { set: r.set.toLowerCase(), collector_number: r.cn } : { name: r.name }));
-    const res = await postCollection(ids);
+    let res: { data: any[]; not_found: any[] };
+    try {
+      res = await postCollection(ids);
+    } catch (e) {
+      // Scryfall unreachable: fall back to the local bulk card list (default art).
+      console.warn('Scryfall lookup failed, using local card data:', (e as Error).message);
+      continue;
+    }
     const retry: CardRequest[] = [];
     for (const c of res.data) {
       const s = slim(c);
@@ -154,7 +162,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
       const req = chunk.find((r) =>
         miss.name ? normalizeName(r.name) === normalizeName(miss.name) : r.set?.toLowerCase() === miss.set && r.cn === miss.collector_number,
       );
-      if (!req || cache.has(normalizeName(req.name))) continue;
+      if (!req || cache.has(normalizeName(req.name)) || bulkCard(req.name)) continue;
       await sleep(100);
       const alt = (await fuzzy(req.name)) ?? (req.name.includes('//') ? await fuzzy(req.name.split('//')[0].trim()) : null);
       if (alt) {
@@ -169,7 +177,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
 
   for (const r of requests) {
     const printing = printingOf(r);
-    const card = printing ?? cache.get(normalizeName(r.name));
+    const card = printing ?? cache.get(normalizeName(r.name)) ?? bulkCard(r.name);
     if (!card) {
       if (!notFound.includes(r.name)) notFound.push(r.name);
       continue;

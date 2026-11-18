@@ -1,4 +1,4 @@
-import type { ActivatedAbility, CardDef } from './cardtypes';
+import type { ActivatedAbility, CardDef, CastVariant } from './cardtypes';
 import type { ManaCost, ManaSource } from './mana';
 import { costVariants, emptyPool, parseCost, payFromPool, solvePayment } from './mana';
 import {
@@ -15,7 +15,7 @@ import {
   log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot,
 } from './state';
 import type {
-  Action, CardId, CardInstance, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot,
+  Action, CardId, CardInstance, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot, StackItem,
   Target, TargetSpecView,
 } from './types';
 import { COLORS } from './types';
@@ -35,6 +35,18 @@ function abilityColors(state: GameState, pid: PlayerId, ab: ActivatedAbility): M
   return m.colors;
 }
 
+/** Activation restrictions: "only if ...", "only once each turn", "only during your turn". */
+function restrictionsOk(state: GameState, c: CardInstance, ab: ActivatedAbility, index: number): boolean {
+  if (ab.condition && !ab.condition(state, c)) return false;
+  if (ab.onceEachTurn && c.usedOnTurn?.[`a${index}`] === state.turn) return false;
+  if (ab.yourTurnOnly && state.activePlayer !== c.controller) return false;
+  return true;
+}
+
+function markUsed(state: GameState, c: CardInstance, ab: ActivatedAbility, index: number): void {
+  if (ab.onceEachTurn) c.usedOnTurn = { ...(c.usedOnTurn ?? {}), [`a${index}`]: state.turn };
+}
+
 function canUseTap(state: GameState, c: CardInstance): boolean {
   if (c.tapped) return false;
   if (hasType(c, 'Creature') && c.sick && !hasKeyword(state, c, 'Haste')) return false;
@@ -49,6 +61,7 @@ export function manaSources(state: GameState, pid: PlayerId, exclude: CardId[] =
       if (!ab.mana || ab.cost.mana || ab.cost.sacrifice) return;
       if (ab.cost.life && getPlayer(state, pid).life < ab.cost.life) return;
       if (ab.cost.tap && !canUseTap(state, c)) return;
+      if (!restrictionsOk(state, c, ab, i)) return;
       out.push({
         id: c.id,
         ability: i,
@@ -66,6 +79,7 @@ function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, i
   const ab = defOf(c).abilities![index];
   const colors = abilityColors(state, pid, ab);
   const sym = color && colors.includes(color) ? color : colors[0];
+  markUsed(state, c, ab, index);
   if (ab.cost.tap) tapPermanent(state, c);
   if (ab.cost.sacrificeSelf) moveCard(state, c.id, 'graveyard');
   const pool = getPlayer(state, pid).manaPool;
@@ -97,9 +111,16 @@ function pay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] 
   if (!payFromPool(p.manaPool, found.cost)) throw new RulesError('Mana payment failed');
 }
 
-function spellCost(state: GameState, card: CardInstance, x: number): ManaCost {
+export const HAND_ABILITY = 1000;
+
+function spellCost(state: GameState, card: CardInstance, x: number, variant?: CastVariant): ManaCost {
   const def = defOf(card);
-  const c = parseCost(def.cost);
+  const c = parseCost(variant?.cost ?? def.cost);
+  if (variant?.extraCost) {
+    const e = parseCost(variant.extraCost);
+    for (const k of ['generic', 'W', 'U', 'B', 'R', 'G', 'C'] as const) c[k] += e[k];
+    if (e.hybrid) c.hybrid = [...(c.hybrid ?? []), ...e.hybrid];
+  }
   if (card.zone === 'command') c.generic += 2 * (getPlayer(state, card.owner).commanderCasts[card.id] ?? 0);
   c.generic += c.x * x;
   c.x = 0;
@@ -143,49 +164,83 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
   const out: PlayableAction[] = [];
   const sorcery = sorceryTiming(state, pid);
 
-  if (sorcery && p.landsPlayed < 1) {
+  const landDrops =
+    1 +
+    battlefieldCards(state)
+      .filter((c) => c.controller === pid)
+      .flatMap((c) => defOf(c).statics ?? [])
+      .reduce((n, st) => n + (st.kind === 'extraLand' ? st.n : 0), 0);
+  if (sorcery && p.landsPlayed < landDrops) {
     for (const id of p.hand) {
       if (hasType(state.cards[id], 'Land') && !defOf(state.cards[id]).cannotCast) out.push({ type: 'playLand', cardId: id, label: 'Play land', targets: [] });
     }
   }
 
-  const castables = [...p.hand, ...p.command];
-  for (const id of castables) {
+  for (const id of [...p.hand, ...p.command, ...p.graveyard]) {
     const card = state.cards[id];
     const def = defOf(card);
     if (def.types.includes('Land') || def.cannotCast) continue;
+    const fromGraveyard = card.zone === 'graveyard';
+    if (fromGraveyard && !def.castVariants?.some((v) => v.zone === 'graveyard')) continue;
     const instantSpeed = def.types.includes('Instant') || (def.keywords ?? []).includes('Flash');
     if (!instantSpeed && !sorcery) continue;
-    let sacrificeOptions: CardId[] | undefined;
+    let costCards: CardId[] | undefined;
+    let costLabel: string | undefined;
     if (def.castSacrifice) {
-      sacrificeOptions = battlefieldCards(state)
+      costCards = battlefieldCards(state)
         .filter((c) => c.controller === pid && matchesFilter(state, c, def.castSacrifice, pid, id))
         .map((c) => c.id);
-      if (!sacrificeOptions.length) continue;
+      costLabel = 'Sacrifice (additional cost)';
+      if (!costCards.length) continue;
+    } else if (def.castDiscard) {
+      costCards = p.hand.filter((h) => h !== id);
+      costLabel = 'Discard a card (additional cost)';
+      if (costCards.length < def.castDiscard) continue;
     }
-    const base = parseCost(def.cost);
-    let xMax: number | undefined;
-    if (base.x > 0) {
-      xMax = -1;
-      for (let x = 0; x <= 30; x++) {
-        if (canPay(state, pid, spellCost(state, card, x))) xMax = x;
-        else break;
+    const variants: { index?: number; v?: CastVariant }[] = fromGraveyard ? [] : [{}];
+    def.castVariants?.forEach((v, index) => {
+      if (v.zone !== (fromGraveyard ? 'graveyard' : 'hand')) return;
+      if (v.condition && !v.condition(state, pid)) return;
+      variants.push({ index, v });
+    });
+    for (const { index, v } of variants) {
+      const base = parseCost(v?.cost ?? def.cost);
+      let xMax: number | undefined;
+      if (base.x > 0) {
+        xMax = -1;
+        for (let x = 0; x <= 30; x++) {
+          if (canPay(state, pid, spellCost(state, card, x, v))) xMax = x;
+          else break;
+        }
+        if (xMax < 0) continue;
+      } else if (!canPay(state, pid, spellCost(state, card, 0, v))) continue;
+      const extra = { xMax, sacrificeOptions: costCards, sacrificeLabel: costLabel, variant: index };
+      const name = v ? `${def.name} — ${v.label}` : def.name;
+      if (def.modes && !v?.effect) {
+        for (const combo of modeCombos(def.modes.length, def.modeCount ?? 1)) {
+          const targets = specViews(state, combo.flatMap((m) => def.modes![m].targets), pid, id);
+          if (!targets) continue;
+          const label = `Cast ${name}: ${combo.map((m) => def.modes![m].text.replace(/^•\s*/, '')).join(' + ')}`;
+          out.push({ type: 'cast', cardId: id, label, targets, modes: combo, ...extra });
+        }
+        continue;
       }
-      if (xMax < 0) continue;
-    } else if (!canPay(state, pid, spellCost(state, card, 0))) continue;
-    const extra = { xMax, sacrificeOptions, sacrificeLabel: sacrificeOptions ? 'Sacrifice (additional cost)' : undefined };
-    if (def.modes) {
-      for (const combo of modeCombos(def.modes.length, def.modeCount ?? 1)) {
-        const targets = specViews(state, combo.flatMap((m) => def.modes![m].targets), pid, id);
-        if (!targets) continue;
-        const label = `Cast ${def.name}: ${combo.map((m) => def.modes![m].text.replace(/^•\s*/, '')).join(' + ')}`;
-        out.push({ type: 'cast', cardId: id, label, targets, modes: combo, ...extra });
-      }
-      continue;
+      const targets = specViews(state, v?.targets ?? def.targets, pid, id);
+      if (!targets) continue;
+      out.push({ type: 'cast', cardId: id, label: `Cast ${name}`, targets, ...extra });
     }
-    const targets = specViews(state, def.targets, pid, id);
-    if (!targets) continue;
-    out.push({ type: 'cast', cardId: id, label: `Cast ${def.name}`, targets, ...extra });
+  }
+
+  // Abilities usable from hand (cycling).
+  for (const id of p.hand) {
+    const def = defOf(state.cards[id]);
+    def.handAbilities?.forEach((ab, i) => {
+      if (ab.sorcerySpeed && !sorcery) return;
+      if (ab.cost.mana && !canPay(state, pid, parseCost(ab.cost.mana), [])) return;
+      const targets = specViews(state, ab.targets, pid, id);
+      if (!targets) return;
+      out.push({ type: 'activate', cardId: id, ability: HAND_ABILITY + i, label: ab.text, targets });
+    });
   }
 
   for (const card of battlefieldCards(state)) {
@@ -193,7 +248,7 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
     defOf(card).abilities?.forEach((ab, i) => {
       if (ab.mana) {
         if (!ab.cost.mana && !ab.cost.sacrifice) {
-          if ((!ab.cost.tap || canUseTap(state, card)) && (!ab.cost.life || p.life >= ab.cost.life)) {
+          if ((!ab.cost.tap || canUseTap(state, card)) && (!ab.cost.life || p.life >= ab.cost.life) && restrictionsOk(state, card, ab, i)) {
             out.push({ type: 'manaTap', cardId: card.id, ability: i, label: ab.text, targets: [], manaColors: ab.mana.fixed ? undefined : abilityColors(state, pid, ab) });
           }
         } else {
@@ -230,6 +285,7 @@ function abilityAction(
 ): PlayableAction | null {
   if (ab.sorcerySpeed && !sorcery) return null;
   if (ab.cost.tap && !canUseTap(state, card)) return null;
+  if (!restrictionsOk(state, card, ab, i)) return null;
   if (ab.cost.life && getPlayer(state, pid).life < ab.cost.life) return null;
   let sacrificeOptions: CardId[] | undefined;
   if (ab.cost.sacrifice) {
@@ -317,7 +373,9 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
 
   if (action.type === 'cast') {
     const modesKey = (m?: number[]) => (m ?? []).join(',');
-    const a = legal.find((l) => l.type === 'cast' && l.cardId === action.cardId && modesKey(l.modes) === modesKey(action.modes));
+    const a = legal.find(
+      (l) => l.type === 'cast' && l.cardId === action.cardId && modesKey(l.modes) === modesKey(action.modes) && l.variant === action.variant,
+    );
     if (!a) throw new RulesError("Can't cast that now");
     const card = state.cards[action.cardId];
     const def = defOf(card);
@@ -327,12 +385,18 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       throw new RulesError('Choose a permanent to sacrifice');
     }
     const fromCommand = card.zone === 'command';
-    pay(state, pid, spellCost(state, card, x));
+    const variant = a.variant !== undefined ? def.castVariants![a.variant] : undefined;
+    pay(state, pid, spellCost(state, card, x, variant));
     let sacrificed: Snapshot | undefined;
     if (a.sacrificeOptions) {
       const sc = state.cards[action.sacrifice!];
-      sacrificed = snapshot(state, sc);
-      moveCard(state, sc.id, 'graveyard');
+      if (def.castDiscard) {
+        log(state, `${p.name} discards ${sc.def}.`);
+        moveCard(state, sc.id, 'graveyard');
+      } else {
+        sacrificed = snapshot(state, sc);
+        moveCard(state, sc.id, 'graveyard');
+      }
     }
     if (fromCommand) p.commanderCasts[card.id] = (p.commanderCasts[card.id] ?? 0) + 1;
     moveCard(state, card.id, 'stack', { controller: pid });
@@ -348,9 +412,18 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       x,
       sacrificed,
       modes: a.modes,
+      variant: a.variant,
     });
     log(state, `${p.name} casts ${def.name}${a.modes ? ` (${a.label.replace(/^Cast [^:]+: /, '')})` : ''}${x ? ` (X=${x})` : ''}${describeTargets(state, targets)}.`);
     pushEvent(state, { t: 'cast', card: card.id, controller: pid, def: def.name });
+    const before = state.spellsThisTurn ?? 0;
+    state.spellsThisTurn = before + 1;
+    const top = state.stack[state.stack.length - 1];
+    if (def.storm && before > 0) {
+      for (let i = 0; i < before; i++) state.stack.push({ ...top, id: newId(state, 's'), isCopy: true });
+      log(state, `Storm: ${before} cop${before === 1 ? 'y' : 'ies'} of ${def.name}.`);
+    }
+    checkWard(state, pid, top);
     state.passes = [];
     p.holding = !!action.hold;
     return;
@@ -361,12 +434,24 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     if (!a) throw new RulesError("Can't activate that now");
     const card = state.cards[action.cardId];
     const def = defOf(card);
+    if (action.ability >= HAND_ABILITY) {
+      const hab = def.handAbilities![action.ability - HAND_ABILITY];
+      const targets = validateTargets(a.targets, action.targets);
+      if (hab.cost.mana) pay(state, pid, parseCost(hab.cost.mana), []);
+      log(state, `${p.name} discards ${def.name}: ${hab.text}.`);
+      const snap = snapshot(state, card);
+      moveCard(state, card.id, 'graveyard');
+      state.stack.push({ id: newId(state, 's'), kind: 'ability', controller: pid, cardId: card.id, def: def.name, index: action.ability, targets, text: hab.text, sourceSnapshot: snap });
+      state.passes = [];
+      return;
+    }
     const ab = def.abilities![action.ability];
     const targets = validateTargets(a.targets, action.targets);
     let sacrificed: Snapshot | undefined;
     if (ab.cost.sacrifice) {
       if (!action.sacrifice || !a.sacrificeOptions!.includes(action.sacrifice)) throw new RulesError('Choose a permanent to sacrifice');
     }
+    markUsed(state, card, ab, action.ability);
     const inc = card.inc;
     const sourceSnap = snapshot(state, card);
     if (ab.cost.mana) pay(state, pid, parseCost(ab.cost.mana), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
@@ -404,11 +489,34 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       sourceSnapshot: sourceSnap,
     });
     log(state, `${p.name} activates ${def.name}: ${ab.text}${describeTargets(state, targets)}.`);
+    checkWard(state, pid, state.stack[state.stack.length - 1]);
     state.passes = [];
     p.holding = !!action.hold;
     return;
   }
   throw new RulesError('Unknown action');
+}
+
+/** Ward: targeting an opponent's warded permanent means paying the ward cost or being countered. */
+export function checkWard(state: GameState, pid: PlayerId, item: StackItem | undefined): void {
+  if (!item) return;
+  for (const t of item.targets) {
+    if (!t || t.type !== 'card') continue;
+    const c = state.cards[t.id];
+    const ward = c && c.zone === 'battlefield' && c.controller !== pid ? defOf(c).ward : undefined;
+    if (!ward) continue;
+    queueDecision(state, {
+      player: pid,
+      kind: 'chooseOption',
+      prompt: `${c.def} has ward ${ward}. Pay it, or your ${item.def} is countered.`,
+      options: [
+        { id: 'pay', label: `Pay ${ward}` },
+        { id: 'no', label: "Don't pay" },
+      ],
+      handler: 'core:unlessPay',
+      data: { cost: ward, counterStack: item.id },
+    });
+  }
 }
 
 function describeTargets(state: GameState, targets: (Target | null)[]): string {
@@ -525,6 +633,7 @@ const HANDLERS: Record<string, Handler> = {
       const c = state.cards[at.id];
       if (!hasKeyword(state, c, 'Vigilance')) tapPermanent(state, c);
     }
+    if (list.length) pushEvent(state, { t: 'attackDeclared', player: d.player, count: list.length });
     for (const at of list) pushEvent(state, { t: 'attacks', card: at.id, defender: at.defender, alone: list.length === 1 });
     if (list.length) {
       const byDef = new Map<string, string[]>();
@@ -602,6 +711,32 @@ const HANDLERS: Record<string, Handler> = {
     if (!pick) return;
     state.pendingTriggers = [pick, ...state.pendingTriggers.filter((t) => t !== pick)];
     pick.chosen = true;
+  },
+  'core:surveil': (state, d, a) => {
+    for (const id of a.cards!) moveCard(state, id, 'graveyard');
+    log(state, `${getPlayer(state, d.player).name} surveils, putting ${a.cards!.length} into their graveyard.`);
+    if (d.data?.then) runCardHandler(state, d.data.then, {});
+  },
+  'core:unlessPay': (state, d, a) => {
+    if (a.option === 'pay' && canPay(state, d.player, parseCost(d.data.cost))) {
+      pay(state, d.player, parseCost(d.data.cost));
+      log(state, `${getPlayer(state, d.player).name} pays ${d.data.cost}.`);
+      return;
+    }
+    if (d.data.counterStack) {
+      const idx = state.stack.findIndex((s) => s.id === d.data.counterStack);
+      if (idx >= 0) {
+        const item = state.stack.splice(idx, 1)[0];
+        if (item.kind === 'spell' && !item.isCopy) moveCard(state, item.cardId, 'graveyard');
+        log(state, `${item.def} is countered by ward.`);
+      }
+      return;
+    }
+    runCardHandler(state, d.data.fail, {});
+  },
+  'core:manaChoice': (state, d, a) => {
+    const sym = a.option as ManaSym;
+    getPlayer(state, d.player).manaPool[sym] += d.data.n;
   },
   'core:bounceChosen': (state, _d, a) => {
     for (const id of a.cards!) if (state.cards[id]?.zone === 'battlefield') moveCard(state, id, 'hand');

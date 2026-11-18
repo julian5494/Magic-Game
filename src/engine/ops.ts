@@ -1,7 +1,7 @@
 import type { CardFilter, Ctx, TargetSpec } from './cardtypes';
 import { getDef } from './registry';
 import {
-  alivePlayers, battlefieldCards, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
+  alivePlayers, battlefieldCards, commanderIdentity, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
   hasType, log, matchesFilter, newId, opponentsOf, snapshot,
 } from './state';
 import type {
@@ -97,12 +97,15 @@ export function moveCard(
     }
   }
 
+  if (from === 'hand' && to === 'graveyard') pushEvent(state, { t: 'discard', player: card.owner, card: id });
+
   // Tokens cease to exist once they leave the battlefield.
   if (card.token && from === 'battlefield' && to !== 'battlefield') {
     delete state.cards[id];
     return;
   }
 
+  const paidX = card.x;
   card.zone = to;
   card.inc++;
   card.tapped = false;
@@ -121,6 +124,10 @@ export function moveCard(
   if (to === 'battlefield') {
     const def = defOf(card);
     card.tapped = !!opts.tapped || !!def.entersTapped || !!def.entersTappedIf?.(state, card.controller);
+    if (def.etbCounters) {
+      const n = def.etbCounters.n === 'X' ? paidX ?? 0 : def.etbCounters.n;
+      if (n > 0) card.counters[def.etbCounters.kind] = (card.counters[def.etbCounters.kind] ?? 0) + n;
+    }
     state.battlefield.push(id);
     if (def.shockLand && !card.tapped) {
       queueDecision(state, {
@@ -205,6 +212,10 @@ export function dealDamage(
     p.life -= amount;
     if (combat) {
       pushEvent(state, { t: 'combatDamagePlayer', source: source.id, player: p.id, amount });
+      if (state.monarch === p.id && controller !== p.id) {
+        state.monarch = controller;
+        log(state, `${getPlayer(state, controller).name} takes the monarchy.`);
+      }
       if (source.commander) p.commanderDamage[source.id] = (p.commanderDamage[source.id] ?? 0) + amount;
     }
   } else if (t.type === 'card') {
@@ -555,6 +566,71 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
         data: { dest: opts.dest, tapped: !!opts.tapped, split: !!opts.split },
         privateCards: true,
       });
+    },
+    surveil(p, n, then) {
+      const lib = getPlayer(state, p).library;
+      if (lib.length === 0 || n <= 0) {
+        if (then) runCardHandler(state, { ctx: cardData, key: then }, {});
+        return;
+      }
+      queueDecision(state, {
+        player: p,
+        kind: 'chooseCards',
+        prompt: `Surveil ${n}: choose cards to put into your graveyard (the rest stay on top)`,
+        cards: lib.slice(0, n),
+        min: 0,
+        max: Math.min(n, lib.length),
+        handler: 'core:surveil',
+        data: then ? { then: { ctx: cardData, key: then } } : undefined,
+        privateCards: true,
+      });
+    },
+    proliferate() {
+      // Auto-chosen: grow counters on your permanents and players' poison; -1/-1 on opponents' things.
+      for (const c of battlefieldCards(state)) {
+        for (const k of Object.keys(c.counters)) {
+          if (!c.counters[k]) continue;
+          const mine = c.controller === init.controller;
+          if ((mine && k !== '-1/-1') || (!mine && k === '-1/-1')) c.counters[k]++;
+        }
+      }
+      for (const p of state.players) if (p.id !== init.controller && p.poison > 0 && !p.lost) p.poison++;
+    },
+    unlessPays(p, cost, failKey, data) {
+      queueDecision(state, {
+        player: p,
+        kind: 'chooseOption',
+        prompt: `${init.def}: pay ${cost}? If you don't, the effect happens.`,
+        options: [
+          { id: 'pay', label: `Pay ${cost}` },
+          { id: 'no', label: "Don't pay" },
+        ],
+        handler: 'core:unlessPay',
+        data: { cost, fail: { ctx: cardData, key: failKey, extra: data } },
+      });
+    },
+    copySpell(stackId, newController) {
+      const item = state.stack.find((s) => s.id === stackId);
+      if (!item || item.kind !== 'spell') return;
+      state.stack.push({ ...item, id: newId(state, 's'), isCopy: true, controller: newController ?? init.controller });
+      log(state, `${getPlayer(state, newController ?? init.controller).name} copies ${item.def}.`);
+    },
+    addManaChoice(p, n, colors) {
+      const list: ManaSym[] = colors === 'any' ? ['W', 'U', 'B', 'R', 'G'] : colors === 'identity' ? (commanderIdentity(state, p) as ManaSym[]) : colors;
+      if (list.length === 0) return addMana(state, p, 'C', n);
+      if (list.length === 1) return addMana(state, p, list[0], n);
+      queueDecision(state, {
+        player: p,
+        kind: 'chooseOption',
+        prompt: `Choose a color of mana to add (${n})`,
+        options: list.map((c) => ({ id: c, label: `{${c}}` })),
+        handler: 'core:manaChoice',
+        data: { n },
+      }, true);
+    },
+    becomeMonarch(p) {
+      if (state.monarch !== p) log(state, `${getPlayer(state, p).name} becomes the monarch.`);
+      state.monarch = p;
     },
     scry(p, n, then) {
       const lib = getPlayer(state, p).library;

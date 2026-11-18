@@ -133,6 +133,57 @@ function eventMatches(
     case 'anyEtb':
       ok = e.t === 'etb';
       break;
+    case 'eachUpkeep':
+      ok = e.t === 'step' && e.step === 'upkeep';
+      break;
+    case 'eachEndStep':
+      ok = e.t === 'step' && e.step === 'end';
+      break;
+    case 'opponentEndStep':
+      ok = e.t === 'step' && e.step === 'end' && e.active !== self.controller;
+      break;
+    case 'yourDrawStep':
+      ok = e.t === 'step' && e.step === 'draw' && e.active === self.controller;
+      break;
+    case 'yourBeginCombat':
+      ok = e.t === 'step' && e.step === 'beginCombat' && e.active === self.controller;
+      break;
+    case 'eachBeginCombat':
+      ok = e.t === 'step' && e.step === 'beginCombat';
+      break;
+    case 'youDraw':
+      ok = e.t === 'draw' && e.player === self.controller;
+      break;
+    case 'opponentDraws':
+      ok = e.t === 'draw' && e.player !== self.controller;
+      break;
+    case 'opponentCasts':
+    case 'anyPlayerCasts': {
+      if (e.t !== 'cast' || (t.on === 'opponentCasts' && e.controller === self.controller)) break;
+      const types = getDef(e.def).types;
+      ok =
+        (!t.spellTypes || t.spellTypes.some((x) => types.includes(x))) &&
+        (!t.spellNotTypes || !t.spellNotTypes.some((x) => types.includes(x)));
+      break;
+    }
+    case 'youAttack':
+      ok = e.t === 'attackDeclared' && e.player === self.controller && e.count > 0;
+      break;
+    case 'youDiscard':
+      ok = e.t === 'discard' && e.player === self.controller;
+      break;
+    case 'creatureYouControlDealsCombatDamageToPlayer': {
+      if (e.t !== 'combatDamagePlayer') break;
+      const src = state.cards[e.source];
+      ok = !!src && src.controller === self.controller;
+      break;
+    }
+    case 'equippedCreatureDealsCombatDamageToPlayer':
+      ok = e.t === 'combatDamagePlayer' && self.attachedTo === e.source;
+      break;
+    case 'enchantedCreatureAttacks':
+      ok = e.t === 'attacks' && self.attachedTo === e.card;
+      break;
     case 'anyDies':
       ok = e.t === 'leaves' && e.to === 'graveyard' && isCreatureSnap(e.snap);
       break;
@@ -161,9 +212,20 @@ export function collectTriggers(state: GameState): void {
       seen.add(card.id);
       for (const { t, index } of triggersOf(state, card)) {
         if (eventMatches(state, t, e, card)) {
+          if (t.onceEachTurn) {
+            if (card.usedOnTurn?.[`t${index}`] === state.turn) continue;
+            card.usedOnTurn = { ...(card.usedOnTurn ?? {}), [`t${index}`]: state.turn };
+          }
           state.pendingTriggers.push({ source: card.id, def: card.def, index, controller: card.controller, event: e });
         }
       }
+    }
+    // "When you cast this spell" triggers come from the spell on the stack.
+    if (e.t === 'cast' && state.cards[e.card]) {
+      const spell = state.cards[e.card];
+      (getDef(spell.def).triggers ?? []).forEach((t, index) => {
+        if (t.on === 'castSelf') state.pendingTriggers.push({ source: spell.id, def: spell.def, index, controller: e.controller, event: e });
+      });
     }
     // Leaves-the-battlefield abilities "look back in time".
     if (e.t === 'leaves') {
@@ -258,7 +320,12 @@ export function resolveTop(state: GameState): void {
   const def = getDef(item.def);
   if (item.kind === 'spell') {
     const card = state.cards[item.cardId];
-    const specs = item.modes && def.modes ? item.modes.flatMap((m) => def.modes![m].targets) : def.targets ?? [];
+    const variant = item.variant !== undefined ? def.castVariants?.[item.variant] : undefined;
+    const specs = variant?.targets ?? (item.modes && def.modes ? item.modes.flatMap((m) => def.modes![m].targets) : def.targets ?? []);
+    const finish = () => {
+      if (item.isCopy) return;
+      if (state.cards[item.cardId]?.zone === 'stack') moveCard(state, item.cardId, variant?.exileAfter ? 'exile' : 'graveyard');
+    };
     const targets = item.targets.map((t, i) =>
       t && specs[i] && isStillLegal(state, specs[i], t, item.controller, item.cardId) ? t : null,
     );
@@ -266,11 +333,12 @@ export function resolveTop(state: GameState): void {
     const legal = targets.filter(Boolean).length;
     if (specs.length > 0 && chosen > 0 && legal === 0) {
       log(state, `${def.name} fizzles (no legal targets).`);
-      moveCard(state, item.cardId, 'graveyard');
+      finish();
       return;
     }
     log(state, `${def.name} resolves.`);
     const isPermanent = !def.types.includes('Instant') && !def.types.includes('Sorcery');
+    if (isPermanent && item.isCopy) return; // copies of permanent spells aren't supported; they do nothing
     if (isPermanent) {
       const isAura = (def.subtypes ?? []).includes('Aura');
       moveCard(state, card.id, 'battlefield', { controller: item.controller });
@@ -280,7 +348,9 @@ export function resolveTop(state: GameState): void {
       }
       return;
     }
-    if (item.modes && def.modes) {
+    if (variant?.effect) {
+      variant.effect(makeCtx(state, { controller: item.controller, source: item.cardId, targets, x: item.x, sacrificed: item.sacrificed, def: def.name }));
+    } else if (item.modes && def.modes) {
       // Each mode sees only its own targets.
       let base = 0;
       for (const m of item.modes) {
@@ -292,12 +362,17 @@ export function resolveTop(state: GameState): void {
     } else if (def.effect) {
       def.effect(makeCtx(state, { controller: item.controller, source: item.cardId, targets, x: item.x, sacrificed: item.sacrificed, def: def.name }));
     }
-    if (state.cards[item.cardId]?.zone === 'stack') moveCard(state, item.cardId, 'graveyard');
+    finish();
     return;
   }
 
   // Activated or triggered ability.
-  const ability = item.kind === 'ability' ? def.abilities![item.index!] : getTrigger(item.def, item.index!);
+  const ability =
+    item.kind === 'ability'
+      ? item.index! >= 1000
+        ? def.handAbilities![item.index! - 1000]
+        : def.abilities![item.index!]
+      : getTrigger(item.def, item.index!);
   const specs = ability.targets ?? [];
   const targets = item.targets.map((t, i) =>
     t && specs[i] && isStillLegal(state, specs[i], t, item.controller, item.cardId) ? t : null,
@@ -359,6 +434,7 @@ export function playerLoses(state: GameState, pid: PlayerId, reason: string): vo
     for (const a of state.combat.attackers) a.blockedBy = a.blockedBy.filter((b) => state.cards[b]);
   }
   state.decisions = state.decisions.filter((d) => d.player !== pid);
+  if (state.monarch === pid) state.monarch = state.activePlayer !== pid ? state.activePlayer : nextPlayer(state, pid);
   state.pendingTriggers = state.pendingTriggers.filter((t) => t.controller !== pid);
   state.passes = state.passes.filter((x) => x !== pid);
   if (state.priority === pid) state.priority = nextPlayer(state, pid);
@@ -441,6 +517,7 @@ export function startTurn(state: GameState, pid: PlayerId): void {
   state.activePlayer = pid;
   for (const p of state.players) {
     p.landsPlayed = 0;
+    state.spellsThisTurn = 0;
     p.lifeGainedThisTurn = 0;
     if (p.passUntilTurn !== null && p.passUntilTurn < state.turn) p.passUntilTurn = null;
   }
@@ -456,13 +533,14 @@ export function canAttack(state: GameState, c: CardInstance): boolean {
     !c.tapped &&
     (!c.sick || hasKeyword(state, c, 'Haste')) &&
     !hasKeyword(state, c, 'Defender') &&
+    !hasKeyword(state, c, 'CantAttack') &&
     !cantAttackOrBlock(state, c)
   );
 }
 
 export function canBlock(state: GameState, blocker: CardInstance, attacker: CardInstance): boolean {
   if (blocker.zone !== 'battlefield' || !hasType(blocker, 'Creature') || blocker.tapped) return false;
-  if (cantAttackOrBlock(state, blocker) || blocker.temp.cantBlock) return false;
+  if (cantAttackOrBlock(state, blocker) || blocker.temp.cantBlock || hasKeyword(state, blocker, 'CantBlock')) return false;
   const akw = getKeywords(state, attacker);
   if (akw.includes('Unblockable')) return false;
   const bkw = getKeywords(state, blocker);
@@ -488,9 +566,11 @@ function enterStep(state: GameState, step: Step): void {
     case 'upkeep':
     case 'end':
       pushEvent(state, { t: 'step', step, active: ap });
+      if (step === 'end' && state.monarch === ap) drawCards(state, ap, 1);
       state.priority = ap;
       return;
     case 'draw':
+      pushEvent(state, { t: 'step', step, active: ap });
       if (!(state.turn === 1 && state.players.length === 2)) drawCards(state, ap, 1);
       state.priority = ap;
       return;
@@ -501,6 +581,7 @@ function enterStep(state: GameState, step: Step): void {
       return;
     case 'beginCombat':
       state.combat = { attackers: [], blockersDeclared: false, firstStrikeDone: false, dealtFirstStrike: [] };
+      pushEvent(state, { t: 'step', step, active: ap });
       state.priority = ap;
       return;
     case 'declareAttackers': {
