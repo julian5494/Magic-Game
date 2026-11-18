@@ -230,3 +230,22 @@ describe('full games', () => {
     }
   }, 60_000);
 });
+
+describe('mana available (view)', () => {
+  it('counts each untapped source once, grouped by color', () => {
+    const { s, A } = setup();
+    put(s, A, 'Forest');
+    put(s, A, 'Forest');
+    put(s, A, 'Sol Ring');
+    put(s, A, 'Command Tower');
+    const tapped = put(s, A, 'Mountain');
+    tapped.tapped = true;
+    const v = buildView(s, A);
+    const me = v.players.find((p) => p.id === A)!;
+    expect(me.mana.total).toBe(5);
+    expect(me.mana.groups.find((g) => g.produces.join('') === 'G')?.amount).toBe(2);
+    expect(me.mana.groups.find((g) => g.produces.join('') === 'C')?.amount).toBe(2);
+    const opp = v.players.find((p) => p.id !== A)!;
+    expect(opp.mana.total).toBe(0);
+  });
+});

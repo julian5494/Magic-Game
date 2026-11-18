@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { GameBoard } from './components/GameBoard';
 import { Lobby } from './components/Lobby';
 import { RoomScreen } from './components/RoomScreen';
+import { Showcase } from './components/Showcase';
 import { useConnection } from './net';
 
 export function App() {
@@ -13,8 +14,10 @@ export function App() {
     return () => clearTimeout(t);
   }, [state.errors, dismissError]);
 
+  const showcase = new URLSearchParams(location.search).get('showcase');
   let screen;
-  if (!state.playerId) screen = <div className="center-msg">{state.connected ? 'Connecting…' : 'Connecting to server…'}</div>;
+  if (showcase !== null) screen = <Showcase scene={showcase} />;
+  else if (!state.playerId) screen = <div className="center-msg">{state.connected ? 'Connecting…' : 'Connecting to server…'}</div>;
   else if (state.view && state.room?.started) screen = <GameBoard view={state.view} net={state} send={send} />;
   else if (state.room) screen = <RoomScreen net={state} send={send} />;
   else screen = <Lobby net={state} send={send} />;

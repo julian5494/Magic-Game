@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CardId, Decision, LogEntry, PlayerId, Step, Target } from '../../engine/types';
-import type { CardView, GameView, PlayerView, StackView } from '../../engine/view';
+import type { CardView, GameView, StackView } from '../../engine/view';
 import type { ChatLine } from '../net';
 import { Card, ManaText } from './Card';
 
@@ -41,118 +41,6 @@ export function PhaseTracker({ view }: { view: GameView }) {
 export interface ZoneOpen {
   title: string;
   cards: CardId[];
-}
-
-export function PlayerPanel({
-  p,
-  view,
-  selectable,
-  attackTarget,
-  onClick,
-  onZone,
-  onHover,
-  isMe,
-  extra,
-  focused,
-  onFocus,
-}: {
-  p: PlayerView;
-  view: GameView;
-  selectable: boolean;
-  attackTarget: boolean;
-  onClick: () => void;
-  onZone: (z: ZoneOpen) => void;
-  onHover: (c: CardView | null) => void;
-  isMe?: boolean;
-  extra?: HTMLAttributes<HTMLDivElement>;
-  focused?: boolean;
-  onFocus?: () => void;
-}) {
-  const active = view.activePlayer === p.id;
-  const waiting = view.waitingOn.includes(p.id);
-  const passed = view.stack.length > 0 && view.passes.includes(p.id);
-  const pool = Object.entries(p.manaPool).filter(([, n]) => n > 0);
-  return (
-    <div
-      className={`player-panel ${active ? 'active' : ''} ${waiting ? 'waiting' : ''} ${selectable ? 'selectable' : ''} ${attackTarget ? 'attack-target' : ''} ${p.lost ? 'lost' : ''}`}
-      data-player-id={p.id}
-      onClick={onClick}
-      {...extra}
-    >
-      <div className="pp-top">
-        <span className="pp-name">
-          {p.name}
-          {p.isBot && <span className="tag">BOT</span>}
-          {isMe && <span className="tag">YOU</span>}
-          {onFocus && (
-            <button
-              className={`link focus-btn ${focused ? 'on' : ''}`}
-              title={focused ? 'This board is shown big' : 'Show this board big'}
-              onClick={(e) => {
-                e.stopPropagation();
-                onFocus();
-              }}
-            >
-              ⛶
-            </button>
-          )}
-        </span>
-        {view.stack.length > 0 && !p.lost && (
-          <span className={`pass-chip ${passed ? 'passed' : waiting ? 'deciding' : ''}`} title="Priority">
-            {passed ? 'passed' : waiting ? 'responding…' : 'to act'}
-          </span>
-        )}
-        <span className="pp-life" title="Life">
-          {p.life}
-        </span>
-      </div>
-      {p.lost ? (
-        <div className="pp-lost">Out — {p.lossReason}</div>
-      ) : (
-        <>
-          <div className="pp-stats">
-            <span title="Cards in hand">✋ {p.handCount}</span>
-            <span title="Library">📚 {p.libraryCount}</span>
-            <button className="link" onClick={(e) => { e.stopPropagation(); onZone({ title: `${p.name}'s graveyard`, cards: p.graveyard }); }}>
-              🪦 {p.graveyard.length}
-            </button>
-            <button className="link" onClick={(e) => { e.stopPropagation(); onZone({ title: `${p.name}'s exile`, cards: p.exile }); }}>
-              ⛔ {p.exile.length}
-            </button>
-            {p.poison > 0 && <span title="Poison">☠ {p.poison}</span>}
-            <span className="identity">
-              {p.colorIdentity.map((c) => (
-                <span key={c} className={`pip pip-${c}`}>{c}</span>
-              ))}
-            </span>
-          </div>
-          {p.commanderDamage.filter((d) => d.amount > 0).length > 0 && (
-            <div className="pp-cmd-dmg">
-              {p.commanderDamage.filter((d) => d.amount > 0).map((d) => (
-                <span key={d.commander} title="Commander damage taken">
-                  ★ {d.name}: {d.amount}/21
-                </span>
-              ))}
-            </div>
-          )}
-          {pool.length > 0 && (
-            <div className="pp-pool">
-              {pool.map(([k, n]) => (
-                <span key={k}>
-                  <ManaText text={`{${k}}`} />×{n}
-                </span>
-              ))}
-            </div>
-          )}
-          {p.command.length > 0 && (
-            <div className="pp-command">
-              {p.command.map((id) => view.cards[id] && <Card key={id} card={view.cards[id]} size="tiny" onHover={onHover} />)}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
 }
 
 export function StackPanel({

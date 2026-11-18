@@ -1,4 +1,4 @@
-import { legalActions } from './game';
+import { legalActions, manaSources } from './game';
 import { getDef } from './registry';
 import {
   attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, typeLine,
@@ -37,6 +37,14 @@ export interface CardView {
   /** Rules text the engine doesn't automate. */
   unsupported?: string[];
   cannotCast?: boolean;
+  /** Ward cost, e.g. "{2}". */
+  ward?: string;
+}
+
+/** Mana a player could make right now, grouped by what each source can produce. */
+export interface ManaAvailable {
+  total: number;
+  groups: { produces: ManaSym[]; amount: number; costly: number }[];
 }
 
 export interface PlayerView {
@@ -58,6 +66,9 @@ export interface PlayerView {
   holding: boolean;
   passUntilEndOfTurn: boolean;
   colorIdentity: Color[];
+  mana: ManaAvailable;
+  /** This player's commanders (wherever they are). */
+  commanders: CardId[];
 }
 
 export interface StackView {
@@ -125,6 +136,7 @@ export function cardView(state: GameState, c: CardInstance): CardView {
     image: c.art ?? def.image,
     unsupported: def.unsupported?.length ? def.unsupported : undefined,
     cannotCast: def.cannotCast || undefined,
+    ward: def.ward,
   };
 }
 
@@ -141,6 +153,13 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     for (const id of [...p.graveyard, ...p.exile, ...p.command]) add(id);
   }
   if (me) for (const id of me.hand) add(id);
+  // Commanders are public knowledge wherever they are, except while hidden in a library or someone's hand.
+  for (const p of state.players) {
+    for (const id of p.commanders) {
+      const z = state.cards[id]?.zone;
+      if (z && z !== 'library' && (z !== 'hand' || p.id === you)) add(id);
+    }
+  }
 
   const decision = state.decisions.find((d) => d.player === you && (state.phase === 'mulligan' || d === state.decisions[0])) ?? null;
   if (decision?.cards) for (const id of decision.cards) add(id);
@@ -168,6 +187,8 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     holding: !!p.holding,
     passUntilEndOfTurn: p.passUntilTurn === state.turn,
     colorIdentity: p.commanders.flatMap((id) => (state.cards[id] ? colorIdentity(getDef(state.cards[id].def)) : [])),
+    mana: availableMana(state, p.id),
+    commanders: [...p.commanders],
   }));
 
   const waitingOn =
@@ -214,4 +235,33 @@ function redactDecision(d: Decision): Decision {
   // Handler data can contain server-only details; the client doesn't need it.
   const { data: _data, ...rest } = d;
   return rest as Decision;
+}
+
+const ORDER: ManaSym[] = ['W', 'U', 'B', 'R', 'G', 'C'];
+
+/** Count each untapped source once (a card with several mana abilities still taps once), plus floating mana. */
+export function availableMana(state: GameState, pid: PlayerId): ManaAvailable {
+  const perCard = new Map<CardId, { produces: Set<ManaSym>; amount: number; costly: boolean }>();
+  for (const src of manaSources(state, pid)) {
+    const amount = src.fixed ? src.fixed.length : src.amount;
+    const cur = perCard.get(src.id) ?? { produces: new Set<ManaSym>(), amount: 0, costly: true };
+    for (const s of src.fixed ?? src.produces) cur.produces.add(s);
+    cur.amount = Math.max(cur.amount, amount);
+    cur.costly = cur.costly && src.costly;
+    perCard.set(src.id, cur);
+  }
+  const groups = new Map<string, { produces: ManaSym[]; amount: number; costly: number }>();
+  const add = (produces: ManaSym[], amount: number, costly: boolean) => {
+    const sorted = ORDER.filter((s) => produces.includes(s));
+    const key = sorted.join('');
+    const g = groups.get(key) ?? { produces: sorted, amount: 0, costly: 0 };
+    g.amount += amount;
+    if (costly) g.costly += amount;
+    groups.set(key, g);
+  };
+  for (const c of perCard.values()) add([...c.produces], c.amount, c.costly);
+  const pool = getPlayer(state, pid).manaPool;
+  for (const s of ORDER) if (pool[s] > 0) add([s], pool[s], false);
+  const list = [...groups.values()].sort((a, b) => a.produces.length - b.produces.length || ORDER.indexOf(a.produces[0]) - ORDER.indexOf(b.produces[0]));
+  return { total: list.reduce((n, g) => n + g.amount, 0), groups: list };
 }

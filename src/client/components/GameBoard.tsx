@@ -3,8 +3,11 @@ import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, T
 import type { CardView, GameView, StackView } from '../../engine/view';
 import type { ClientMessage } from '../../shared/protocol';
 import type { NetState } from '../net';
+import { previewCombat, type CombatPreview, type PlannedAttack } from '../combat';
+import { Battlefield, MatPicker, SEAT_COLORS, useMats, useSize, type PermProps, type PreviewMark } from './Board';
 import { Card, CardPreview, IMAGES_KEY, imagesEnabled, ManaText } from './Card';
-import { DecisionModal, LogPanel, nameOfPlayer, PhaseTracker, PlayerPanel, StackPanel, STEP_LABELS, XModal, ZoneModal, type ZoneOpen } from './parts';
+import { DecisionModal, LogPanel, nameOfPlayer, PhaseTracker, StackPanel, STEP_LABELS, XModal, ZoneModal, type ZoneOpen } from './parts';
+import { CommandZone, LifeMedallion, ManaAvailable, Piles, SeatHeader } from './Seats';
 
 interface Pending {
   action: PlayableAction;
@@ -20,9 +23,25 @@ interface Menu {
   items: { label: string; run: () => void }[];
 }
 
+const HAND_W = 126;
 const sameTarget = (a: Target, b: Target) => a.type === b.type && a.id === b.id;
 
 const CLICK_KEY = 'commander-arena-click-to-play';
+const CALM_KEY = 'commander-arena-calm';
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === 'on';
+  } catch {
+    return false;
+  }
+}
+function writeFlag(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? 'on' : 'off');
+  } catch {
+    /* ignore */
+  }
+}
 function readClickToPlay(): boolean {
   try {
     return localStorage.getItem(CLICK_KEY) === 'on';
@@ -49,7 +68,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [, forceRender] = useState(0);
   const [hold, setHold] = useState(false);
   const [drag, setDrag] = useState<{ id: CardId; kind: DragKind } | null>(null);
-  const [focus, setFocus] = useState<'auto' | PlayerId>('auto');
+  const [topPin, setTopPin] = useState<PlayerId | null>(null);
+  const [fullBoard, setFullBoard] = useState<PlayerId | null>(null);
+  const [calm, setCalm] = useState(() => readFlag(CALM_KEY));
+  const [mats, setMat] = useMats();
   const [clickToPlay, setClickToPlay] = useState(readClickToPlay);
   const [selectedHand, setSelectedHand] = useState<CardId | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -296,38 +318,28 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   // ---------- Card state helpers ----------
   const combat = view.combat;
-  const attackerIndex = new Map<CardId, number>();
-  combat?.attackers.forEach((a, i) => attackerIndex.set(a.id, i + 1));
   const blockerOf = new Map<CardId, CardId>();
   combat?.attackers.forEach((a) => a.blockedBy.forEach((b) => blockerOf.set(b, a.id)));
 
-  const cardProps = (id: CardId) => {
+  const cardProps = (id: CardId): PermProps => {
     const c = view.cards[id];
     const legal = !targeting && !sacrificing && !decision && actionsFor(id).some((a) => a.type !== 'manaTap' && !a.isMana);
     let selectable = legal;
     let selected = false;
-    let badge: string | undefined;
+    const badge: string | undefined = undefined;
     let attacking = !!combat?.attackers.some((a) => a.id === id);
     let blocking = blockerOf.has(id);
-    if (attacking) badge = `⚔${attackerIndex.get(id)}`;
-    if (blocking) badge = `🛡${attackerIndex.get(blockerOf.get(id)!)}`;
     if (targeting) selectable = isTargetable({ type: 'card', id });
     if (sacrificing) selectable = sacrificing.includes(id);
     if (decision?.kind === 'declareAttackers' && decision.player === view.you) {
       selectable = decision.attackers!.includes(id) || !!decision.planeswalkers?.includes(id);
       if (attackTarget === id) selected = true;
       attacking = !!attacks[id];
-      if (attacks[id] && (opponents.length > 1 || view.cards[attacks[id]])) {
-        badge = `→${(view.cards[attacks[id]]?.name ?? nameOfPlayer(view, attacks[id])).slice(0, 8)}`;
-      }
     }
     if (decision?.kind === 'declareBlockers' && decision.player === view.you) {
       selectable = decision.blockers!.includes(id) || (!!selBlocker && decision.attacking!.includes(id));
       selected = selBlocker === id;
-      if (blocks[id]) {
-        blocking = true;
-        badge = `🛡${attackerIndex.get(blocks[id])}`;
-      }
+      if (blocks[id]) blocking = true;
     }
     const extra: Extra = { ...dropProps({ type: 'card', id }) };
     const dropOk = !!drag && drag.id !== id && canDrop({ type: 'card', id });
@@ -432,10 +444,49 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const modalDecision = myDecision && ['chooseCards', 'chooseOption', 'mulligan'].includes(myDecision.kind) ? myDecision : null;
-  const meView = view.players.find((p) => p.id === view.you)!;
 
-  // Arrows: attacks, blocks and what spells/abilities on the stack target.
+  const [handRef, handSize] = useSize<HTMLDivElement>();
+  const modalDecision = myDecision && ['chooseCards', 'chooseOption', 'mulligan'].includes(myDecision.kind) ? myDecision : null;
+  const meView = me;
+  const myTurn = view.activePlayer === view.you;
+
+  // ---------- Seats ----------
+  const colorOf = (pid: PlayerId) => SEAT_COLORS[Math.max(0, view.players.findIndex((p) => p.id === pid)) % SEAT_COLORS.length];
+  const defaultMat = (pid: PlayerId) => ['forest', 'nebula', 'gilded', 'ember'][Math.max(0, view.players.findIndex((p) => p.id === pid)) % 4];
+  const matOf = (pid: PlayerId) => mats[pid] ?? defaultMat(pid);
+  const liveOpps = opponents.filter((p) => !p.lost);
+  // The active player sits in the top seat; on your turn it's the next opponent. You can pin someone else there.
+  useEffect(() => setTopPin(null), [view.activePlayer]);
+  const autoTop = myTurn ? (liveOpps[0] ?? opponents[0])?.id : view.activePlayer;
+  const topId = topPin && view.players.some((p) => p.id === topPin && p.id !== view.you) ? topPin : autoTop;
+  const topP = view.players.find((p) => p.id === topId);
+  const sideSeats = opponents.filter((p) => p.id !== topId);
+
+  // ---------- Combat preview ----------
+  let preview: CombatPreview | null = null;
+  const previewMarks: Record<CardId, PreviewMark> = {};
+  if (view.combat && view.combat.attackers.length && view.step === 'declareBlockers') {
+    const proposing = myDecision?.kind === 'declareBlockers';
+    const planned: PlannedAttack[] = view.combat.attackers.map((a) => ({
+      id: a.id,
+      defender: a.defender,
+      planeswalker: a.planeswalker,
+      blockers: proposing && a.defender === view.you ? Object.entries(blocks).filter(([, at]) => at === a.id).map(([b]) => b) : a.blockedBy,
+    }));
+    preview = previewCombat(view, planned, view.you);
+    for (const [id, d] of Object.entries(preview.damage)) {
+      const c = view.cards[id];
+      if (!c) continue;
+      previewMarks[id] = {
+        damage: d,
+        dies: preview.dies.has(id),
+        survives: !preview.dies.has(id) && c.toughness !== undefined ? `${c.power}/${c.toughness - c.damage - d}` : undefined,
+      };
+    }
+  }
+  const lifeAfter = (pid: PlayerId) => (preview && preview.life[pid] ? (view.players.find((p) => p.id === pid)?.life ?? 0) + preview.life[pid] : undefined);
+
+  // ---------- Arrows ----------
   const arrows: Arrow[] = [];
   const toSel = (t: Target | string) =>
     typeof t === 'string'
@@ -451,104 +502,109 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     for (const [id, t] of Object.entries(attacks)) arrows.push({ from: `[data-card-id="${id}"]`, to: toSel(t), kind: 'attack', pending: true });
   }
   for (const a of view.combat?.attackers ?? []) {
-    arrows.push({ from: `[data-card-id="${a.id}"]`, to: toSel(a.planeswalker ?? a.defender), kind: 'attack' });
-    for (const b of a.blockedBy) arrows.push({ from: `[data-card-id="${b}"]`, to: `[data-card-id="${a.id}"]`, kind: 'block' });
-  }
-  if (myDecision?.kind === 'declareBlockers') {
-    for (const [b, a] of Object.entries(blocks)) arrows.push({ from: `[data-card-id="${b}"]`, to: `[data-card-id="${a}"]`, kind: 'block', pending: true });
+    const proposed = myDecision?.kind === 'declareBlockers' && a.defender === view.you;
+    const blockers = proposed ? Object.entries(blocks).filter(([, at]) => at === a.id).map(([b]) => b) : a.blockedBy;
+    const target = toSel(a.planeswalker ?? a.defender);
+    if (blockers.length) {
+      // A blocked attacker's arrow points at what's blocking it.
+      for (const b of blockers) arrows.push({ from: `[data-card-id="${a.id}"]`, to: `[data-card-id="${b}"]`, kind: 'attack', pending: proposed });
+      const over = preview?.trample[a.id];
+      if (over) arrows.push({ from: `[data-card-id="${blockers[blockers.length - 1]}"]`, to: target, kind: 'trample', label: `${over} trample` });
+    } else if (!a.blocked) {
+      arrows.push({ from: `[data-card-id="${a.id}"]`, to: target, kind: 'attack' });
+    }
   }
   for (const s of view.stack) {
     for (const t of s.targets) if (t) arrows.push({ from: `[data-stack-id="${s.id}"]`, to: toSel(t), kind: 'target' });
   }
 
-  // Which board is shown big: the active player's by default, or one the player pinned.
-  const focusId = focus === 'auto' || view.players.find((p) => p.id === focus)?.lost ? view.activePlayer : focus;
-  const focusOnMe = focusId === view.you;
-  const toggleFocus = (pid: PlayerId) => setFocus(focus === pid ? 'auto' : pid);
+  const playerSelectable = (pid: PlayerId) =>
+    (!!targeting && isTargetable({ type: 'player', id: pid })) ||
+    (!!drag && canDrop({ type: 'player', id: pid })) ||
+    (myDecision?.kind === 'declareAttackers' && !!myDecision.defenders?.includes(pid) && liveOpps.length > 1);
+
+  const noGroup = (id: CardId) =>
+    !!view.combat?.attackers.some((a) => a.id === id || a.blockedBy.includes(id)) ||
+    (myDecision?.kind === 'declareAttackers' && !!myDecision.attackers?.includes(id)) ||
+    (myDecision?.kind === 'declareBlockers' && (!!myDecision.blockers?.includes(id) || !!myDecision.attacking?.includes(id))) ||
+    (!!targeting && isTargetable({ type: 'card', id }));
+
+  const boardFor = (pid: PlayerId, mode: 'full' | 'tile', mini = false) => (
+    <Battlefield
+      view={view}
+      owner={pid}
+      mode={mode}
+      mini={mini}
+      cardProps={cardProps}
+      onCardClick={onCardClick}
+      onHover={setHover}
+      seatColor={colorOf(pid)}
+      noGroup={noGroup}
+      preview={previewMarks}
+    />
+  );
+
+  const medallion = (p: typeof me, size: 'sm' | 'md' | 'lg') => (
+    <LifeMedallion
+      p={p}
+      color={colorOf(p.id)}
+      size={size}
+      after={lifeAfter(p.id)}
+      selectable={playerSelectable(p.id)}
+      extra={dropProps({ type: 'player', id: p.id })}
+      onClick={() => onPlayerClick(p.id)}
+    />
+  );
+
+  const commanderThumbs = (p: typeof me) => (
+    <div className="seat-cmd">
+      {p.commanders.map((id) => view.cards[id] && <Card key={id} card={view.cards[id]} size="tiny" showTapped={false} dim={view.cards[id].zone !== 'command'} onHover={setHover} />)}
+    </div>
+  );
+
+  const topActive = topP?.id === view.activePlayer;
+  const fullP = fullBoard ? view.players.find((p) => p.id === fullBoard) : null;
+  const phaseBanner = myTurn ? 'Your turn' : `${nameOfPlayer(view, view.activePlayer)}'s turn`;
 
   return (
-    <div className={`game ${focusOnMe ? 'focus-me' : 'focus-opp'} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)}>
-      <div className="opponents">
-        {opponents.map((p) => {
-          const big = !focusOnMe && focusId === p.id;
-          const areaDrop = dropProps({ type: 'area', owner: p.id });
-          return (
-            <div
-              key={p.id}
-              className={`opp-area ${big ? 'focused' : ''} ${drag && canDrop({ type: 'area', owner: p.id }) ? 'drop-zone' : ''}`}
-              {...areaDrop}
-            >
-              <PlayerPanel
-                p={p}
-                view={view}
-                selectable={(!!targeting && isTargetable({ type: 'player', id: p.id })) || (!!drag && canDrop({ type: 'player', id: p.id }))}
-                attackTarget={myDecision?.kind === 'declareAttackers' && attackTarget === p.id}
-                onClick={() => onPlayerClick(p.id)}
-                onZone={setZone}
-                onHover={setHover}
-                extra={dropProps({ type: 'player', id: p.id })}
-                focused={focusId === p.id}
-                onFocus={() => toggleFocus(p.id)}
-              />
-              <Battlefield view={view} owner={p.id} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} compact={!big && (opponents.length > 1 || focusOnMe)} />
+    <div className={`table-root ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)}>
+      <aside className="col-left">
+        <Piles p={me} view={view} onZone={setZone} />
+        <StackPanel view={view} selectable={isTargetable} onClick={onStackClick} onHover={setHover} />
+        <CommandZone view={view} p={me} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} />
+      </aside>
+
+      <main className="col-main">
+        {topP ? (
+          <section
+            className={`seat seat-top mat mat-${matOf(topP.id)} ${topActive ? 'active' : ''} ${drag && canDrop({ type: 'area', owner: topP.id }) ? 'drop-zone' : ''}`}
+            style={{ ['--c' as string]: colorOf(topP.id) }}
+            {...dropProps({ type: 'area', owner: topP.id })}
+          >
+            <div className="rim" />
+            {boardFor(topP.id, topActive ? 'full' : 'tile')}
+            <div className="top-info">
+              <SeatHeader p={topP} view={view} color={colorOf(topP.id)} mat={matOf(topP.id)} onMat={(m) => setMat(topP.id, m)} life={medallion(topP, 'md')}>
+                <button className="chip-btn" onClick={(e) => { e.stopPropagation(); setFullBoard(topP.id); }}>
+                  ⤢ Full board
+                </button>
+              </SeatHeader>
+              <div className="top-extra">
+                {commanderThumbs(topP)}
+                <Piles p={topP} view={view} onZone={setZone} small />
+              </div>
             </div>
-          );
-        })}
-      </div>
+          </section>
+        ) : (
+          <section className="seat seat-top empty" />
+        )}
 
-      <div className="middle">
-        <PhaseTracker view={view} />
-        <label className="focus-select" title="Which player's board is shown big">
-          Big board:{' '}
-          <select value={focus} onChange={(e) => setFocus(e.target.value)}>
-            <option value="auto">Follow the turn</option>
-            {view.players
-              .filter((p) => !p.lost)
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.id === view.you ? 'Mine' : p.name}
-                </option>
-              ))}
-          </select>
-        </label>
-      </div>
-      <StackPanel view={view} selectable={isTargetable} onClick={onStackClick} onHover={setHover} />
-
-      <div className={`me-area ${drag && canDrop({ type: 'area', owner: view.you }) ? 'drop-zone' : ''}`} {...dropProps({ type: 'area', owner: view.you })}>
-        {drag?.kind === 'hand' && <div className="drop-hint">Drop here to play {view.cards[drag.id]?.name}</div>}
-        <Battlefield view={view} owner={view.you} cardProps={cardProps} onCardClick={onCardClick} onHover={setHover} compact={!focusOnMe} />
-      </div>
-
-      <div className="bottom">
-        <div className="bottom-left">
-          <PlayerPanel
-            p={meView}
-            view={view}
-            isMe
-            selectable={(!!targeting && isTargetable({ type: 'player', id: view.you })) || (!!drag && canDrop({ type: 'player', id: view.you }))}
-            attackTarget={false}
-            onClick={() => onPlayerClick(view.you)}
-            onZone={setZone}
-            onHover={setHover}
-            extra={dropProps({ type: 'player', id: view.you })}
-            focused={focusOnMe}
-            onFocus={() => toggleFocus(view.you)}
-          />
-          <div className="command-zone">
-            {me.command.map((id) => {
-              const props = cardProps(id);
-              return view.cards[id] && <Card key={id} {...props} size="small" onClick={() => onCardClick(id)} onHover={setHover} />;
-            })}
+        <div className="centerbar">
+          <PhaseTracker view={view} />
+          <div className="prompt-pill">
+            <div className="turn-banner">✦ {phaseBanner} · {STEP_LABELS[view.step]} ✦</div>
+            <div className="prompt-text">{prompt}</div>
           </div>
-        </div>
-        <div className="hand">
-          {view.hand.map((id) => {
-            const props = cardProps(id);
-            return props.card && <Card key={id} {...props} size="medium" onClick={(() => onCardClick(id))} onHover={setHover} />;
-          })}
-        </div>
-        <div className="bottom-right">
-          <div className="prompt">{prompt}</div>
           <div className="buttons">
             <button className="small gear" title="Settings" onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}>
               ⚙
@@ -559,55 +615,176 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               </button>
             ))}
           </div>
-          <div className={`settings ${showSettings ? 'open' : ''}`} onClick={(e) => e.stopPropagation()}>
-            <label title="When the game should stop and give you priority">
-              Stops:{' '}
-              <select value={meView.autoPass} onChange={(e) => act({ type: 'setAutoPass', mode: e.target.value as AutoPassMode })}>
-                <option value="smart">Smart (skip when I can't respond)</option>
-                <option value="stack">Every spell & ability opponents use</option>
-                <option value="none">Full control (every step)</option>
-              </select>
-            </label>
-            <label title="After you cast a spell or activate an ability, keep priority so you can respond to it yourself">
-              <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} /> Hold priority
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={imagesEnabled()}
-                onChange={(e) => {
-                  try {
-                    localStorage.setItem(IMAGES_KEY, e.target.checked ? 'on' : 'off');
-                  } catch {
-                    /* ignore */
-                  }
-                  forceRender((n) => n + 1);
-                }}
-              />{' '}
-              Card images
-            </label>
-            <label title="Off: double-click or drag cards from your hand to play them. On: a single click plays them.">
-              <input
-                type="checkbox"
-                checked={clickToPlay}
-                onChange={(e) => {
-                  setClickToPlay(e.target.checked);
-                  try {
-                    localStorage.setItem(CLICK_KEY, e.target.checked ? 'on' : 'off');
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-              />{' '}
-              Single-click plays cards
-            </label>
-            <button className="small" onClick={() => confirm('Concede this game?') && act({ type: 'concede' })}>
-              Concede
-            </button>
-          </div>
-          <LogPanel log={view.log} chat={net.chat} onChat={(text) => send({ t: 'chat', text })} view={view} onHover={setHover} />
+          {showSettings && (
+            <div className="settings open" onClick={(e) => e.stopPropagation()}>
+              <label title="When the game should stop and give you priority">
+                Stops:{' '}
+                <select value={meView.autoPass} onChange={(e) => act({ type: 'setAutoPass', mode: e.target.value as AutoPassMode })}>
+                  <option value="smart">Smart (skip when I can't respond)</option>
+                  <option value="stack">Every spell & ability opponents use</option>
+                  <option value="none">Full control (every step)</option>
+                </select>
+              </label>
+              <label title="After you cast a spell or activate an ability, keep priority so you can respond to it yourself">
+                <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} /> Hold priority
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={imagesEnabled()}
+                  onChange={(e) => {
+                    try {
+                      localStorage.setItem(IMAGES_KEY, e.target.checked ? 'on' : 'off');
+                    } catch {
+                      /* ignore */
+                    }
+                    forceRender((n) => n + 1);
+                  }}
+                />{' '}
+                Card images
+              </label>
+              <label title="Off: double-click or drag cards from your hand to play them. On: a single click plays them.">
+                <input
+                  type="checkbox"
+                  checked={clickToPlay}
+                  onChange={(e) => {
+                    setClickToPlay(e.target.checked);
+                    writeFlag(CLICK_KEY, e.target.checked);
+                  }}
+                />{' '}
+                Single-click plays cards
+              </label>
+              <label title="Turn off the moving keyword effects (flying, runes, smoke…)">
+                <input
+                  type="checkbox"
+                  checked={calm}
+                  onChange={(e) => {
+                    setCalm(e.target.checked);
+                    writeFlag(CALM_KEY, e.target.checked);
+                  }}
+                />{' '}
+                Reduce effects
+              </label>
+              <button className="small" onClick={() => confirm('Concede this game?') && act({ type: 'concede' })}>
+                Concede
+              </button>
+            </div>
+          )}
         </div>
-      </div>
+
+        <section
+          className={`seat seat-me mat mat-${matOf(view.you)} ${myTurn ? 'active' : ''} ${drag && canDrop({ type: 'area', owner: view.you }) ? 'drop-zone' : ''}`}
+          style={{ ['--c' as string]: colorOf(view.you) }}
+          {...dropProps({ type: 'area', owner: view.you })}
+        >
+          <div className="rim" />
+          {drag?.kind === 'hand' && <div className="drop-hint">Drop here to play {view.cards[drag.id]?.name}</div>}
+          {boardFor(view.you, myTurn ? 'full' : 'tile')}
+          <div className="me-mat">
+            <MatPicker value={matOf(view.you)} onChange={(m) => setMat(view.you, m)} />
+          </div>
+        </section>
+
+        <div className="bottombar">
+          <div className="me-info">
+            {medallion(me, 'lg')}
+            <div>
+              <div className="nm">{me.name}</div>
+              <div className="sub">✋ {me.handCount} in hand</div>
+            </div>
+          </div>
+          <div className="hand" ref={handRef}>
+            {view.hand.map((id, i) => {
+              const props = cardProps(id);
+              const n = view.hand.length;
+              const off = i - (n - 1) / 2;
+              return (
+                props.card && (
+                  <div
+                    key={id}
+                    className="hand-slot"
+                    style={{
+                      ['--r' as string]: `${off * Math.min(3, 18 / n)}deg`,
+                      ['--y' as string]: `${Math.abs(off) * Math.min(4, 24 / n)}px`,
+                      marginLeft: i === 0 ? 0 : -Math.max(30, Math.min(110, HAND_W - (handSize.w - 24 - HAND_W) / Math.max(1, n - 1))),
+                    }}
+                  >
+                    <Card {...props} size="large" onClick={() => onCardClick(id)} onHover={setHover} />
+                  </div>
+                )
+              );
+            })}
+          </div>
+          <ManaAvailable p={me} />
+        </div>
+      </main>
+
+      <aside className="col-right">
+        {sideSeats.map((p) => (
+          <section
+            key={p.id}
+            className={`side-seat mat mat-${matOf(p.id)} ${view.activePlayer === p.id ? 'active' : ''} ${p.lost ? 'lost' : ''} ${drag && canDrop({ type: 'area', owner: p.id }) ? 'drop-zone' : ''}`}
+            style={{ ['--c' as string]: colorOf(p.id) }}
+            {...dropProps({ type: 'area', owner: p.id })}
+          >
+            <div className="rim" />
+            <SeatHeader p={p} view={view} color={colorOf(p.id)} mat={matOf(p.id)} onMat={(m) => setMat(p.id, m)} life={medallion(p, 'sm')}>
+              <button className="chip-btn" title="Move to the top seat" onClick={(e) => { e.stopPropagation(); setTopPin(p.id); }}>
+                ⇅ Top seat
+              </button>
+              <button className="chip-btn" title="See their whole board" onClick={(e) => { e.stopPropagation(); setFullBoard(p.id); }}>
+                ⤢ Full
+              </button>
+            </SeatHeader>
+            <div className="side-body">
+              {commanderThumbs(p)}
+              <div className="side-board">{boardFor(p.id, 'tile', true)}</div>
+            </div>
+            <Piles p={p} view={view} onZone={setZone} small />
+          </section>
+        ))}
+        {preview && preview.lines.length > 0 && (
+          <div className="combat-preview">
+            <h4>Combat preview</h4>
+            <div className="sub">What happens if combat resolves as it stands</div>
+            {preview.lines.map((l, i) => (
+              <div key={i} className="pv-row">
+                <b>{l.title}</b>
+                <span className={l.tone}>{l.result}</span>
+                <div className="res">{l.detail}</div>
+              </div>
+            ))}
+            {view.players
+              .filter((p) => preview!.life[p.id])
+              .map((p) => (
+                <div key={p.id} className="pv-row">
+                  <b>{p.id === view.you ? 'You' : p.name}</b>
+                  <span className={preview!.life[p.id] < 0 ? 'bad' : 'good'}>
+                    {p.life} → {p.life + preview!.life[p.id]}
+                  </span>
+                </div>
+              ))}
+            <div className="sub note">Spells and abilities used before damage can change this.</div>
+          </div>
+        )}
+        <LogPanel log={view.log} chat={net.chat} onChat={(text) => send({ t: 'chat', text })} view={view} onHover={setHover} />
+      </aside>
+
+      {fullP && (
+        <div className="modal-backdrop full-board" onClick={() => setFullBoard(null)}>
+          <section className={`seat full-seat mat mat-${matOf(fullP.id)}`} style={{ ['--c' as string]: colorOf(fullP.id) }} onClick={(e) => e.stopPropagation()}>
+            <div className="rim" />
+            <div className="full-head">
+              <SeatHeader p={fullP} view={view} color={colorOf(fullP.id)} mat={matOf(fullP.id)} onMat={(m) => setMat(fullP.id, m)} life={medallion(fullP, 'md')}>
+                <button className="chip-btn" onClick={() => setFullBoard(null)}>
+                  ✕ Close
+                </button>
+              </SeatHeader>
+            </div>
+            <div className="full-body">{boardFor(fullP.id, 'full')}</div>
+          </section>
+        </div>
+      )}
 
       <ArrowLayer arrows={arrows} />
 
@@ -673,18 +850,30 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 }
 
+
 // ---------- Arrows ----------
 
 interface Arrow {
   from: string;
   to: string;
-  kind: 'attack' | 'block' | 'target';
+  kind: 'attack' | 'block' | 'target' | 'trample';
   pending?: boolean;
+  label?: string;
 }
 
-/** Draws arrows between on-screen elements (re-measured as the layout changes). */
+interface Line {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  kind: string;
+  pending?: boolean;
+  label?: string;
+}
+
+/** Draws curved arrows between on-screen elements (re-measured as the layout changes). */
 function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
-  const [lines, setLines] = useState<{ x1: number; y1: number; x2: number; y2: number; kind: string; pending?: boolean }[]>([]);
+  const [lines, setLines] = useState<Line[]>([]);
   const key = JSON.stringify(arrows);
   const last = useRef('');
   const measure = useCallback(() => {
@@ -692,16 +881,17 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
       const el = document.querySelector(sel);
       if (!el) return null;
       const r = el.getBoundingClientRect();
+      if (!r.width) return null;
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     };
     const next = (JSON.parse(key) as Arrow[])
       .map((a) => {
         const p = center(a.from);
         const q = center(a.to);
-        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending } : null;
+        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending, label: a.label } : null;
       })
-      .filter(Boolean) as typeof lines;
-    const sig = JSON.stringify(next.map((l) => [Math.round(l.x1), Math.round(l.y1), Math.round(l.x2), Math.round(l.y2), l.kind]));
+      .filter(Boolean) as Line[];
+    const sig = JSON.stringify(next.map((l) => [Math.round(l.x1), Math.round(l.y1), Math.round(l.x2), Math.round(l.y2), l.kind, l.label]));
     if (sig !== last.current) {
       last.current = sig;
       setLines(next);
@@ -709,7 +899,7 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
   }, [key]);
   useLayoutEffect(measure);
   useEffect(() => {
-    const t = setInterval(measure, 400);
+    const t = setInterval(measure, 300);
     window.addEventListener('resize', measure);
     return () => {
       clearInterval(t);
@@ -720,108 +910,36 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
   return (
     <svg className="arrow-layer">
       <defs>
-        {['attack', 'block', 'target'].map((k) => (
-          <marker key={k} id={`head-${k}`} markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" className={`head-${k}`} />
+        {['attack', 'block', 'target', 'trample'].map((k) => (
+          <marker key={k} id={`head-${k}`} markerWidth="5" markerHeight="5" refX="3.2" refY="2.5" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L5,2.5 L0,5 z" className={`head-${k}`} />
           </marker>
         ))}
       </defs>
       {lines.map((l, i) => {
-        // Stop short of the target's centre so the arrowhead stays visible.
+        // Stop short of the target's centre so the head stays visible, and bend the line a little.
         const dx = l.x2 - l.x1;
         const dy = l.y2 - l.y1;
         const len = Math.hypot(dx, dy) || 1;
-        const shorten = Math.min(30, len / 3);
+        const shorten = Math.min(26, len / 3);
+        const x2 = l.x2 - (dx / len) * shorten;
+        const y2 = l.y2 - (dy / len) * shorten;
+        const bend = Math.min(60, len * 0.18);
+        const cx = (l.x1 + x2) / 2 + (-dy / len) * bend;
+        const cy = (l.y1 + y2) / 2 + (dx / len) * bend;
+        const d = `M${l.x1},${l.y1} Q${cx},${cy} ${x2},${y2}`;
         return (
-          <line
-            key={i}
-            x1={l.x1}
-            y1={l.y1}
-            x2={l.x2 - (dx / len) * shorten}
-            y2={l.y2 - (dy / len) * shorten}
-            className={`arrow arrow-${l.kind} ${l.pending ? 'pending' : ''}`}
-            markerEnd={`url(#head-${l.kind})`}
-          />
+          <g key={i}>
+            <path d={d} className="arrow-glow" />
+            <path d={d} className={`arrow arrow-${l.kind} ${l.pending ? 'pending' : ''}`} markerEnd={`url(#head-${l.kind})`} />
+            {l.label && (
+              <text x={x2 + 34} y={y2 - 22} className="arrow-label">
+                {l.label}
+              </text>
+            )}
+          </g>
         );
       })}
     </svg>
-  );
-}
-
-// ---------- Battlefield ----------
-
-type CardPropsFn = (id: CardId) => {
-  card: CardView;
-  selectable: boolean;
-  selected: boolean;
-  attacking: boolean;
-  blocking: boolean;
-  badge?: string;
-  extra?: Extra;
-  dropOk?: boolean;
-};
-
-function Battlefield({
-  view,
-  owner,
-  cardProps,
-  onCardClick,
-  onHover,
-  compact,
-}: {
-  view: GameView;
-  owner: PlayerId;
-  cardProps: CardPropsFn;
-  onCardClick: (id: CardId) => void;
-  onHover: (c: CardView | null) => void;
-  compact?: boolean;
-}) {
-  const mine = view.battlefield.map((id) => view.cards[id]).filter((c) => c && c.controller === owner);
-  const attachedIds = new Set(mine.filter((c) => c.attachedTo && view.cards[c.attachedTo]).map((c) => c.id));
-  const allAttached = new Set(view.battlefield.filter((id) => view.cards[id]?.attachedTo && view.cards[view.cards[id].attachedTo!]));
-  const creatures = mine.filter((c) => c.types.includes('Creature') && !attachedIds.has(c.id));
-  const lands = mine.filter((c) => c.types.includes('Land') && !c.types.includes('Creature'));
-  const others = mine.filter((c) => !c.types.includes('Creature') && !c.types.includes('Land') && !attachedIds.has(c.id));
-  const size = compact ? 'small' : 'medium';
-
-  // Group identical lands (same name & tapped state) like Arena does.
-  const landGroups: { key: string; ids: CardId[] }[] = [];
-  for (const l of lands) {
-    const key = `${l.name}|${l.tapped}|${l.attachments.length}`;
-    const g = landGroups.find((x) => x.key === key);
-    if (g) g.ids.push(l.id);
-    else landGroups.push({ key, ids: [l.id] });
-  }
-
-  const renderWithAttachments = (c: CardView) => {
-    const atts = view.battlefield.filter((id) => allAttached.has(id) && view.cards[id].attachedTo === c.id);
-    return (
-      <div key={c.id} className="perm-wrap">
-        {atts.map((aid, i) => (
-          <div key={aid} className="attached" style={{ top: -14 * (i + 1) }}>
-            <Card {...cardProps(aid)} size="tiny" onClick={() => onCardClick(aid)} onHover={onHover} />
-          </div>
-        ))}
-        <Card {...cardProps(c.id)} size={size} onClick={() => onCardClick(c.id)} onHover={onHover} />
-      </div>
-    );
-  };
-
-  return (
-    <div className={`battlefield ${compact ? 'compact' : ''}`}>
-      <div className="bf-row creatures">{creatures.map(renderWithAttachments)}</div>
-      <div className="bf-row noncreatures">
-        {others.map(renderWithAttachments)}
-        {landGroups.map((g) => {
-          const pickable = g.ids.find((id) => cardProps(id).selectable) ?? g.ids.find((id) => !view.cards[id].tapped) ?? g.ids[0];
-          const props = cardProps(pickable);
-          return (
-            <div key={g.key} className="perm-wrap land-group">
-              <Card {...props} size={compact ? 'tiny' : 'small'} onClick={() => onCardClick(pickable)} onHover={onHover} badge={g.ids.length > 1 ? `×${g.ids.length}` : props.badge} />
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 }
