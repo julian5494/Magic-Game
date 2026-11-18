@@ -136,6 +136,8 @@ export interface Cost {
   /** Sacrifice another permanent matching this filter (chosen when activating). */
   sacrifice?: CardFilter;
   life?: number;
+  /** Planeswalker loyalty cost (+1, -2, 0). */
+  loyalty?: number;
 }
 
 export interface ActivatedAbility {
@@ -256,6 +258,12 @@ export interface CardDef {
   modes?: { text: string; targets: TargetSpec[]; effect: Effect }[];
   /** How many modes are chosen (default 1). */
   modeCount?: number;
+  /** Starting loyalty for planeswalkers. */
+  loyalty?: number;
+  /** Modal double-faced card: the back face (a land or spell), by name. */
+  backFace?: string;
+  /** "You may have this enter as a copy of any <kind> on the battlefield." */
+  cloneOf?: 'creature' | 'artifact' | 'permanent';
   /** "enters with N counters on it" (n 'X' = the X paid). */
   etbCounters?: { kind: string; n: number | 'X' };
   /** Unparsed text includes a drawback, so the card can't be played (rather than played without it). */

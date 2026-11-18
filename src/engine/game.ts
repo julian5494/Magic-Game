@@ -164,6 +164,10 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
   const out: PlayableAction[] = [];
   const sorcery = sorceryTiming(state, pid);
 
+  // Cards exiled with "you may play it this turn".
+  const impulse = Object.values(state.cards)
+    .filter((c) => c.zone === 'exile' && c.playableBy?.player === pid && c.playableBy.untilTurn >= state.turn)
+    .map((c) => c.id);
   const landDrops =
     1 +
     battlefieldCards(state)
@@ -171,12 +175,15 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
       .flatMap((c) => defOf(c).statics ?? [])
       .reduce((n, st) => n + (st.kind === 'extraLand' ? st.n : 0), 0);
   if (sorcery && p.landsPlayed < landDrops) {
-    for (const id of p.hand) {
-      if (hasType(state.cards[id], 'Land') && !defOf(state.cards[id]).cannotCast) out.push({ type: 'playLand', cardId: id, label: 'Play land', targets: [] });
+    for (const id of [...p.hand, ...impulse]) {
+      const def = defOf(state.cards[id]);
+      if (hasType(state.cards[id], 'Land') && !def.cannotCast) out.push({ type: 'playLand', cardId: id, label: 'Play land', targets: [] });
+      const back = def.backFace ? getDef(def.backFace) : null;
+      if (back && back.types.includes('Land') && !back.cannotCast) out.push({ type: 'playLand', cardId: id, label: `Play ${back.name} (back face)`, targets: [], back: true });
     }
   }
 
-  for (const id of [...p.hand, ...p.command, ...p.graveyard]) {
+  for (const id of [...p.hand, ...p.command, ...p.graveyard, ...impulse]) {
     const card = state.cards[id];
     const def = defOf(card);
     if (def.types.includes('Land') || def.cannotCast) continue;
@@ -286,6 +293,11 @@ function abilityAction(
   if (ab.sorcerySpeed && !sorcery) return null;
   if (ab.cost.tap && !canUseTap(state, card)) return null;
   if (!restrictionsOk(state, card, ab, i)) return null;
+  if (ab.cost.loyalty !== undefined) {
+    if (!sorcery) return null;
+    if (card.usedOnTurn?.loyalty === state.turn) return null;
+    if (ab.cost.loyalty < 0 && (card.counters.loyalty ?? 0) < -ab.cost.loyalty) return null;
+  }
   if (ab.cost.life && getPlayer(state, pid).life < ab.cost.life) return null;
   let sacrificeOptions: CardId[] | undefined;
   if (ab.cost.sacrifice) {
@@ -357,8 +369,13 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
 
   const legal = legalActions(state, pid);
   if (action.type === 'playLand') {
-    if (!legal.some((a) => a.type === 'playLand' && a.cardId === action.cardId)) throw new RulesError("Can't play that land now");
+    if (!legal.some((a) => a.type === 'playLand' && a.cardId === action.cardId && !!a.back === !!action.back)) throw new RulesError("Can't play that land now");
     p.landsPlayed++;
+    if (action.back) {
+      const c = state.cards[action.cardId];
+      c.frontDef = c.def;
+      c.def = defOf(c).backFace!;
+    }
     log(state, `${p.name} plays ${state.cards[action.cardId].def}.`);
     moveCard(state, action.cardId, 'battlefield', { controller: pid });
     return;
@@ -452,6 +469,10 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       if (!action.sacrifice || !a.sacrificeOptions!.includes(action.sacrifice)) throw new RulesError('Choose a permanent to sacrifice');
     }
     markUsed(state, card, ab, action.ability);
+    if (ab.cost.loyalty !== undefined) {
+      card.counters.loyalty = (card.counters.loyalty ?? 0) + ab.cost.loyalty;
+      card.usedOnTurn = { ...(card.usedOnTurn ?? {}), loyalty: state.turn };
+    }
     const inc = card.inc;
     const sourceSnap = snapshot(state, card);
     if (ab.cost.mana) pay(state, pid, parseCost(ab.cost.mana), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
@@ -627,8 +648,12 @@ const HANDLERS: Record<string, Handler> = {
       const c = state.cards[at.id];
       if (!d.attackers!.includes(at.id) || !c || !canAttack(state, c)) throw new RulesError('That creature cannot attack');
       if (!d.defenders!.includes(at.defender)) throw new RulesError('Invalid defending player');
+      if (at.planeswalker) {
+        const pw = state.cards[at.planeswalker];
+        if (!d.planeswalkers?.includes(at.planeswalker) || !pw || pw.controller !== at.defender) throw new RulesError('Invalid planeswalker to attack');
+      }
     }
-    combat.attackers = list.map((at) => ({ id: at.id, defender: at.defender, blockedBy: [], blocked: false }));
+    combat.attackers = list.map((at) => ({ id: at.id, defender: at.defender, planeswalker: at.planeswalker, blockedBy: [], blocked: false }));
     for (const at of list) {
       const c = state.cards[at.id];
       if (!hasKeyword(state, c, 'Vigilance')) tapPermanent(state, c);
@@ -737,6 +762,17 @@ const HANDLERS: Record<string, Handler> = {
   'core:manaChoice': (state, d, a) => {
     const sym = a.option as ManaSym;
     getPlayer(state, d.player).manaPool[sym] += d.data.n;
+  },
+  'core:clone': (state, d, a) => {
+    const c = state.cards[d.data.card];
+    if (!c || c.inc !== d.data.inc || c.zone !== 'battlefield') return;
+    const pick = a.cards?.[0] ? state.cards[a.cards[0]] : null;
+    if (pick) {
+      c.frontDef = c.frontDef ?? c.def;
+      c.def = pick.def;
+      log(state, `${c.frontDef} enters as a copy of ${pick.def}.`);
+    }
+    pushEvent(state, { t: 'etb', card: c.id, controller: c.controller });
   },
   'core:bounceChosen': (state, _d, a) => {
     for (const id of a.cards!) if (state.cards[id]?.zone === 'battlefield') moveCard(state, id, 'hand');

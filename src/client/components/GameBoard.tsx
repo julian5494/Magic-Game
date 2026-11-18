@@ -111,7 +111,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   const startAction = (a: PlayableAction, color?: ManaSym) => {
     setMenu(null);
-    if (a.type === 'playLand') return act({ type: 'playLand', cardId: a.cardId });
+    if (a.type === 'playLand') return act({ type: 'playLand', cardId: a.cardId, back: a.back });
     if (a.type === 'manaTap') return act({ type: 'manaTap', cardId: a.cardId, ability: a.ability!, color: color ?? a.manaColors?.[0] });
     const p: Pending = { action: a, stage: a.xMax !== undefined ? 'x' : a.sacrificeOptions ? 'sacrifice' : 'targets', targets: [], color };
     if (p.stage === 'targets' && a.targets.length === 0) return finishPending(p);
@@ -148,6 +148,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       return;
     }
     if (decision?.kind === 'declareAttackers' && decision.player === view.you) {
+      if (decision.planeswalkers?.includes(id)) {
+        setAttackTarget(id);
+        return;
+      }
       if (!decision.attackers!.includes(id)) return;
       const next = { ...attacks };
       if (next[id]) delete next[id];
@@ -210,9 +214,12 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     if (targeting) selectable = isTargetable({ type: 'card', id });
     if (sacrificing) selectable = sacrificing.includes(id);
     if (decision?.kind === 'declareAttackers' && decision.player === view.you) {
-      selectable = decision.attackers!.includes(id);
+      selectable = decision.attackers!.includes(id) || !!decision.planeswalkers?.includes(id);
+      if (attackTarget === id) selected = true;
       attacking = !!attacks[id];
-      if (attacks[id] && opponents.length > 1) badge = `→${nameOfPlayer(view, attacks[id]).slice(0, 6)}`;
+      if (attacks[id] && (opponents.length > 1 || view.cards[attacks[id]])) {
+        badge = `→${(view.cards[attacks[id]]?.name ?? nameOfPlayer(view, attacks[id])).slice(0, 8)}`;
+      }
     }
     if (decision?.kind === 'declareBlockers' && decision.player === view.you) {
       selectable = decision.blockers!.includes(id) || (!!selBlocker && decision.attacking!.includes(id));
@@ -242,8 +249,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   } else if (myDecision?.kind === 'declareAttackers') {
     const n = Object.keys(attacks).length;
     prompt = opponents.filter((o) => !o.lost).length > 1
-      ? `Click creatures to attack. Click an opponent to choose who they attack (now: ${attackTarget ? nameOfPlayer(view, attackTarget) : '—'}).`
-      : 'Click creatures to attack.';
+      ? `Click creatures to attack. Click an opponent or their planeswalker to choose what they attack (now: ${attackTarget ? view.cards[attackTarget]?.name ?? nameOfPlayer(view, attackTarget) : '—'}).`
+      : myDecision.planeswalkers?.length
+        ? `Click creatures to attack. Click a planeswalker to attack it instead (now: ${attackTarget ? view.cards[attackTarget]?.name ?? nameOfPlayer(view, attackTarget) : '—'}).`
+        : 'Click creatures to attack.';
     buttons.push({
       label: 'All attack',
       run: () => setAttacks(Object.fromEntries(myDecision.attackers!.map((id) => [id, attacks[id] ?? attackTarget ?? myDecision.defenders![0]]))),
@@ -251,7 +260,16 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     buttons.push({
       label: n ? `Attack with ${n}` : 'No attacks',
       primary: true,
-      run: () => act({ type: 'decide', decisionId: myDecision.id, answer: { attackers: Object.entries(attacks).map(([id, defender]) => ({ id, defender })) } }),
+      run: () =>
+        act({
+          type: 'decide',
+          decisionId: myDecision.id,
+          answer: {
+            attackers: Object.entries(attacks).map(([id, target]) =>
+              view.cards[target] ? { id, defender: view.cards[target].controller, planeswalker: target } : { id, defender: target },
+            ),
+          },
+        }),
     });
   } else if (myDecision?.kind === 'declareBlockers') {
     const n = Object.keys(blocks).length;

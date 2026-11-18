@@ -472,6 +472,7 @@ export function checkStateBased(state: GameState): boolean {
       c.counters['-1/-1'] -= n;
       changed = true;
     }
+    if (hasType(c, 'Planeswalker') && (c.counters.loyalty ?? 0) <= 0) toGraveyard.push(c.id);
     if (hasType(c, 'Creature')) {
       const { toughness } = getPT(state, c);
       if (toughness <= 0) toGraveyard.push(c.id);
@@ -594,6 +595,9 @@ function enterStep(state: GameState, step: Step): void {
         prompt: 'Declare attackers',
         attackers: attackers.map((c) => c.id),
         defenders,
+        planeswalkers: battlefieldCards(state)
+          .filter((c) => defenders.includes(c.controller) && hasType(c, 'Planeswalker'))
+          .map((c) => c.id),
         handler: 'core:attackers',
       });
       return;
@@ -703,13 +707,16 @@ function dealCombatDamage(state: GameState, first: boolean): void {
     const power = getPT(state, A).power;
     if (power <= 0) continue;
     const trample = hasKeyword(state, A, 'Trample');
+    // Attacking a planeswalker that has left the battlefield deals no damage.
+    const pw = a.planeswalker ? state.cards[a.planeswalker] : null;
+    const hit: Target | null = a.planeswalker ? (pw && pw.zone === 'battlefield' ? { type: 'card', id: pw.id } : null) : { type: 'player', id: a.defender };
     if (!a.blocked) {
-      assignments.push({ source: A, target: { type: 'player', id: a.defender }, amount: power });
+      if (hit) assignments.push({ source: A, target: hit, amount: power });
       continue;
     }
     const blockers = a.blockedBy.map((id) => state.cards[id]).filter((b) => b && b.zone === 'battlefield');
     if (blockers.length === 0) {
-      if (trample) assignments.push({ source: A, target: { type: 'player', id: a.defender }, amount: power });
+      if (trample && hit) assignments.push({ source: A, target: hit, amount: power });
       continue;
     }
     const dt = hasKeyword(state, A, 'Deathtouch');
@@ -721,7 +728,7 @@ function dealCombatDamage(state: GameState, first: boolean): void {
       if (amt > 0) assignments.push({ source: A, target: { type: 'card', id: b.id }, amount: amt });
       remaining -= amt;
     });
-    if (trample && remaining > 0) assignments.push({ source: A, target: { type: 'player', id: a.defender }, amount: remaining });
+    if (trample && remaining > 0 && hit) assignments.push({ source: A, target: hit, amount: remaining });
   }
   for (const a of combat.attackers) {
     const A = state.cards[a.id];
@@ -735,8 +742,11 @@ function dealCombatDamage(state: GameState, first: boolean): void {
   }
   for (const as of assignments) dealDamage(state, as.source, as.target, as.amount, true);
   const total = assignments.filter((a) => a.target.type === 'player');
-  for (const t of total) {
-    log(state, `${t.source.def} deals ${t.amount} combat damage to ${getPlayer(state, t.target.id).name}.`);
+  for (const t of assignments) {
+    if (t.target.type === 'player') log(state, `${t.source.def} deals ${t.amount} combat damage to ${getPlayer(state, t.target.id).name}.`);
+    else if (state.cards[t.target.id] && hasType(state.cards[t.target.id], 'Planeswalker') && !state.combat?.attackers.some((x) => x.blockedBy.includes(t.target.id))) {
+      log(state, `${t.source.def} deals ${t.amount} combat damage to ${state.cards[t.target.id].def}.`);
+    }
   }
 }
 

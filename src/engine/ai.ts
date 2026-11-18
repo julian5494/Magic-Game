@@ -141,7 +141,7 @@ function chooseLand(state: GameState, pid: PlayerId, legal: PlayableAction[]): A
     return { l, s };
   });
   scored.sort((a, b) => b.s - a.s);
-  return { type: 'playLand', cardId: scored[0].l.cardId };
+  return { type: 'playLand', cardId: scored[0].l.cardId, back: scored[0].l.back };
 }
 
 function castBest(state: GameState, pid: PlayerId, legal: PlayableAction[], instantOnly: boolean): Action | null {

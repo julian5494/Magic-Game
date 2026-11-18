@@ -46,6 +46,7 @@ function slim(c: any): ScryCard {
     oracle_text: f.oracle_text,
     power: f.power,
     toughness: f.toughness,
+    loyalty: f.loyalty,
     colors: f.colors,
     image_uris: f.image_uris ? { normal: f.image_uris.normal } : undefined,
   });

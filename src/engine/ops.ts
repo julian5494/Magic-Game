@@ -106,6 +106,11 @@ export function moveCard(
   }
 
   const paidX = card.x;
+  if (card.frontDef && to !== 'battlefield' && to !== 'stack') {
+    card.def = card.frontDef;
+    card.frontDef = undefined;
+  }
+  card.playableBy = undefined;
   card.zone = to;
   card.inc++;
   card.tapped = false;
@@ -124,6 +129,7 @@ export function moveCard(
   if (to === 'battlefield') {
     const def = defOf(card);
     card.tapped = !!opts.tapped || !!def.entersTapped || !!def.entersTappedIf?.(state, card.controller);
+    if (def.loyalty) card.counters.loyalty = def.loyalty;
     if (def.etbCounters) {
       const n = def.etbCounters.n === 'X' ? paidX ?? 0 : def.etbCounters.n;
       if (n > 0) card.counters[def.etbCounters.kind] = (card.counters[def.etbCounters.kind] ?? 0) + n;
@@ -142,7 +148,22 @@ export function moveCard(
         data: { card: id, inc: card.inc },
       }, true);
     }
-    pushEvent(state, { t: 'etb', card: id, controller: card.controller });
+    const cloneOptions = def.cloneOf
+      ? battlefieldCards(state).filter((c) => c.id !== id && (def.cloneOf === 'permanent' || hasType(c, def.cloneOf === 'creature' ? 'Creature' : 'Artifact')))
+      : [];
+    if (cloneOptions.length) {
+      // The copy choice is made as it enters; its enters-the-battlefield event fires after the choice.
+      queueDecision(state, {
+        player: card.controller,
+        kind: 'chooseCards',
+        prompt: `${def.name}: choose a ${def.cloneOf} to enter as a copy of (or none)`,
+        cards: cloneOptions.map((c) => c.id),
+        min: 0,
+        max: 1,
+        handler: 'core:clone',
+        data: { card: id, inc: card.inc },
+      }, true);
+    } else pushEvent(state, { t: 'etb', card: id, controller: card.controller });
   } else if (to !== 'stack') {
     const arr = zoneArray(state, card, to)!;
     if (to === 'library') {
@@ -220,7 +241,15 @@ export function dealDamage(
     }
   } else if (t.type === 'card') {
     const c = state.cards[t.id];
-    if (!c || c.zone !== 'battlefield' || !hasType(c, 'Creature')) return;
+    if (!c || c.zone !== 'battlefield') return;
+    if (hasType(c, 'Planeswalker')) {
+      c.counters.loyalty = Math.max(0, (c.counters.loyalty ?? 0) - amount);
+      if (!hasType(c, 'Creature')) {
+        if (kws.includes('Lifelink')) gainLife(state, controller, amount);
+        return;
+      }
+    }
+    if (!hasType(c, 'Creature')) return;
     if (!combat && c.id !== source.id && controllerHasStatic(state, c.controller, 'preventNoncombatDamageToOtherCreatures')) {
       const preventer = battlefieldCards(state).find(
         (x) => x.controller === c.controller && (defOf(x).statics ?? []).some((s) => s.kind === 'preventNoncombatDamageToOtherCreatures'),

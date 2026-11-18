@@ -63,6 +63,10 @@ export interface CardInstance {
   x?: number;
   /** Image of the chosen printing. */
   art?: string;
+  /** Front-face definition while this card is showing its back face or copying something. */
+  frontDef?: string;
+  /** May be played from exile by this player until the end of this turn number (impulse draw). */
+  playableBy?: { player: PlayerId; untilTurn: number };
   /** Turn on which each once-per-turn ability (key) was last used. */
   usedOnTurn?: Record<string, number>;
 }
@@ -171,6 +175,8 @@ export interface PendingTrigger {
 export interface AttackerInfo {
   id: CardId;
   defender: PlayerId;
+  /** Set when attacking one of the defending player's planeswalkers. */
+  planeswalker?: CardId;
   blockedBy: CardId[];
   blocked: boolean;
 }
@@ -202,6 +208,8 @@ export interface Decision {
   /** For declareAttackers */
   attackers?: CardId[];
   defenders?: PlayerId[];
+  /** Opponents' planeswalkers that can be attacked. */
+  planeswalkers?: CardId[];
   /** For declareBlockers */
   blockers?: CardId[];
   attacking?: CardId[];
@@ -220,7 +228,7 @@ export interface TargetSpecView {
 export interface DecisionAnswer {
   cards?: CardId[];
   option?: string;
-  attackers?: { id: CardId; defender: PlayerId }[];
+  attackers?: { id: CardId; defender: PlayerId; planeswalker?: CardId }[];
   blocks?: { blocker: CardId; attacker: CardId }[];
   targets?: (Target | null)[];
   number?: number;
@@ -264,7 +272,7 @@ export interface GameState {
 
 export type Action =
   | { type: 'pass' }
-  | { type: 'playLand'; cardId: CardId }
+  | { type: 'playLand'; cardId: CardId; back?: boolean }
   | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; modes?: number[]; hold?: boolean; variant?: number }
   | { type: 'activate'; cardId: CardId; ability: number; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; color?: ManaSym; hold?: boolean }
   | { type: 'manaTap'; cardId: CardId; ability: number; color?: ManaSym }
@@ -292,4 +300,6 @@ export interface PlayableAction {
   isMana?: boolean;
   /** Cast variant (kicker, flashback, ...). */
   variant?: number;
+  /** Play the back face (modal double-faced lands). */
+  back?: boolean;
 }

@@ -20,6 +20,7 @@ export interface ScryFace {
   oracle_text?: string;
   power?: string;
   toughness?: string;
+  loyalty?: string;
   colors?: string[];
   image_uris?: { normal?: string };
 }
@@ -784,6 +785,43 @@ const SENTENCES: SentenceParser[] = [
     if (typeof n !== 'number') return null;
     return { targets: [], run: (ctx) => ctx.addManaChoice(ctx.controller, n, m[2] ? 'identity' : 'any') };
   },
+  (s) => {
+    const m = s.match(/^create (a|two|three) tokens? that's a copy of (.+)$/i);
+    if (!m) return null;
+    const n = num(m[1]) as number;
+    const subj = permanentsSubject(m[2], 'self');
+    if (!subj?.each) return null;
+    return {
+      targets: subj.targets,
+      run: (ctx, base, sc) => {
+        for (const id of subj.each!(ctx, base, sc)) {
+          const c = ctx.state.cards[id];
+          if (c) ctx.createToken(ctx.controller, c.def, n);
+        }
+      },
+    };
+  },
+  (s) => {
+    const m = s.match(/^IMPULSE (\d+) (thisturn|nextturn)$/);
+    if (!m) return null;
+    const n = +m[1];
+    return {
+      targets: [],
+      run: (ctx) => {
+        const st = ctx.state;
+        const order = st.players.filter((p) => !p.lost).map((p) => p.id);
+        const ai = order.indexOf(st.activePlayer);
+        const me = order.indexOf(ctx.controller);
+        const dist = (me - ai + order.length) % order.length || order.length;
+        const untilTurn = m[2] === 'thisturn' ? st.turn : st.turn + dist;
+        const lib = getPlayer(st, ctx.controller).library;
+        for (const id of lib.slice(0, n)) {
+          ctx.moveCard(id, 'exile');
+          st.cards[id].playableBy = { player: ctx.controller, untilTurn };
+        }
+      },
+    };
+  },
   (s) => (/^investigate$/i.test(s) ? { targets: [], run: (ctx) => void ctx.createToken(ctx.controller, 'Clue Token') } : null),
   (s) => {
     const m = s.match(/^gain (\w+) life$/i);
@@ -1017,6 +1055,14 @@ function parseSentence(raw: string): Piece[] | null {
 
 /** Parse an effect paragraph into targets + effect. Registers continuations on `def.handlers`. */
 function normalizeMulti(text: string): string {
+  text = text.replace(
+    /Exile the top (card|\w+ cards) of your library\. (?:You may play (?:it|that card|them|those cards) this turn|Until (?:the )?end of your next turn, you may play (?:it|that card|them|those cards))\.?/gi,
+    (all, what) => {
+      const n = what === 'card' ? 1 : num(what.split(' ')[0]);
+      if (typeof n !== 'number') return all;
+      return `IMPULSE ${n} ${/next turn/i.test(all) ? 'nextturn' : 'thisturn'}. `;
+    },
+  );
   // "Look at the top N cards of your library. (You may reveal) a/up to N <type> card(s) from among them and put it into your hand.
   //  Put the rest on the bottom of your library in any/a random order."
   return text.replace(
@@ -1430,7 +1476,14 @@ export function convertScryfall(card: ScryCard): CardDef {
     image: face.image_uris?.normal ?? card.image_uris?.normal,
     banned: card.legalities ? card.legalities.commander === 'banned' : undefined,
   };
-  if (card.card_faces && card.card_faces.length > 1 && card.layout !== 'split') {
+  if (card.card_faces && card.card_faces.length > 1 && card.layout === 'modal_dfc') {
+    // Modal double-faced cards: the back face is its own card. Back-face lands can be played.
+    const b = card.card_faces[1];
+    const backDef = findDef(b.name) ?? convertScryfall({ ...b, color_identity: card.color_identity, legalities: card.legalities, layout: 'normal' });
+    if (!findDef(b.name)) registerCards([backDef]);
+    def.backFace = b.name;
+    if (!backDef.types.includes('Land')) def.unsupported!.push(`Back face (${b.name}) can't be cast yet`);
+  } else if (card.card_faces && card.card_faces.length > 1 && card.layout !== 'split') {
     def.unsupported!.push(`Other face (${card.card_faces.slice(1).map((f) => f.name).join(', ')}) isn't playable yet`);
   }
   if (card.layout === 'split') def.unsupported!.push('Split card: only the first half is playable');
@@ -1441,7 +1494,7 @@ export function convertScryfall(card: ScryCard): CardDef {
     def.toughness = parseInt(t, 10) || 0;
     if (/\*/.test(p) || /\*/.test(t)) def.unsupported!.push(`Variable power/toughness (${p}/${t}) is treated as ${def.power}/${def.toughness}`);
   }
-  if (def.types.includes('Planeswalker')) def.unsupported!.push('Planeswalker loyalty abilities');
+  if (def.types.includes('Planeswalker')) def.loyalty = parseInt(face.loyalty ?? (card as ScryFace).loyalty ?? '0', 10) || 0;
   // Basic lands' mana ability comes from their type.
   const basicMana: Record<string, ManaSym> = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' };
   const typeMana = (def.subtypes ?? []).map((s) => basicMana[s]).filter(Boolean);
@@ -1580,6 +1633,11 @@ function handleLine(
     return true;
   }
   if (/^partner(?: with .+)?$|^friends forever$|^choose a background$/i.test(l)) return true;
+  const cl = l.match(/^you may have cardname enter(?: the battlefield)? as a copy of (?:any|a) (creature|artifact|permanent)(?: on the battlefield)?$/i);
+  if (cl) {
+    def.cloneOf = cl[1].toLowerCase() as CardDef['cloneOf'];
+    return true;
+  }
   if (/^storm$/i.test(l)) {
     def.storm = true;
     return true;
@@ -1684,7 +1742,15 @@ function handleLine(
   // Activated abilities "cost: effect".
   m = line.match(/^([^:"]+?): (.+)$/);
   if (m && !/^(when|whenever|at) /i.test(line)) {
-    if (/^[+−-]?\d+$/.test(m[1].trim())) return false; // loyalty
+    const lm = m[1].trim().match(/^\[?([+−-]?)(\d+)\]?$/);
+    if (lm) {
+      // Planeswalker loyalty ability: sorcery speed, once per turn per planeswalker.
+      const n = (lm[1] === '+' ? 1 : lm[1] ? -1 : 1) * +lm[2];
+      const eff = parseEffect(m[2].replace(/\.$/, ''), def, key);
+      if (!eff) return false;
+      def.abilities!.push({ text: original, cost: { loyalty: lm[1] || lm[2] !== '0' ? n : 0 }, targets: eff.targets, effect: eff.effect, sorcerySpeed: true, aiValue: n >= 0 && !eff.targets.length ? 1 : 0 });
+      return true;
+    }
     const cost = parseActivationCost(m[1]);
     if (!cost) return false;
     let effectText = m[2].replace(/\.$/, '');
@@ -1696,7 +1762,8 @@ function handleLine(
     const restriction: Partial<ActivatedAbility> = {};
     let rm: RegExpMatchArray | null;
     while ((rm = effectText.match(/\. Activate (?:this ability )?only (.+?)$/i))) {
-      const r = rm[1].toLowerCase().replace(/\.$/, '');
+      const rOrig = rm[1].replace(/\.$/, '');
+      const r = rOrig.toLowerCase();
       effectText = effectText.slice(0, rm.index);
       if (r === 'as a sorcery') sorcerySpeed = true;
       else if (r === 'once each turn') restriction.onceEachTurn = true;
@@ -1705,7 +1772,7 @@ function handleLine(
         sorcerySpeed = true;
         restriction.onceEachTurn = true;
       } else {
-        const cond = parseControlCondition(r.replace(/^if /, ''));
+        const cond = parseControlCondition(rOrig.replace(/^if /i, ''));
         if (!cond) return false; // unknown restriction: don't hand the ability out
         restriction.condition = (state, self) => cond(state, self.controller);
       }
