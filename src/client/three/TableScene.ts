@@ -21,8 +21,21 @@ const PX = 0.1;
 const TABLE_W = 212;
 const TABLE_D = 132;
 const TRAY_Z = 60;
+const OPP_Z = -59;
 const PITCH = (54 * Math.PI) / 180;
 const FOV = 30;
+
+export interface Anchor {
+  x: number;
+  y: number;
+  r: number;
+}
+export interface Anchors {
+  me?: Anchor;
+  /** Where your die sits with the camera at rest (the hand is centred on this, so it doesn't sway). */
+  home?: Anchor;
+  opp?: Anchor;
+}
 
 export interface Insets {
   top: number;
@@ -66,8 +79,19 @@ export class TableScene {
   private disposed = false;
   private insets: Insets = { top: 70, bottom: 94, left: 40, right: 80 };
   private frameNo = 0;
-  /** Called with the screen position of your d20 after the camera moves. */
-  onLayout: ((die: { x: number; y: number; r: number }) => void) | null = null;
+  /** Called with the screen positions of the dice (for click/drop areas) whenever they move on screen. */
+  onLayout: ((anchors: Anchors) => void) | null = null;
+  private oppDie: Mo.D20 | null = null;
+  private oppGroup = new THREE.Group();
+  private oppArt = '';
+  private oppDieColor = 0;
+  private lastAnchors = '';
+  private home: Anchor | null = null;
+  // Camera: the framed pose, plus a gentle drift that follows the mouse.
+  private basePos = new THREE.Vector3();
+  private baseTarget = new THREE.Vector3();
+  private mouse = new THREE.Vector2();
+  private sway = new THREE.Vector2();
 
   constructor(container: HTMLElement, boardEl: HTMLElement, quality: Quality) {
     this.container = container;
@@ -145,20 +169,11 @@ export class TableScene {
     const P = this.props;
     const hw = TABLE_W / 2;
     const hd = TABLE_D / 2;
-    for (const k of ['candle', 'lantern']) P[k].position.set(-hw + 9, 0.1, -hd + 10);
-    P.tankard.position.set(hw - 10, 0.1, -hd + 11);
     P.tankard.rotation.y = -0.5;
-    P.stein.position.set(hw - 10, 0.1, -hd + 11);
     P.stein.rotation.y = -0.6;
-    for (const k of ['boxLeather', 'boxCarved']) {
-      P[k].position.set(-hw + 10, 0.1, hd - 9);
-      P[k].rotation.y = 0.35;
-    }
-    P.pouch.position.set(hw - 13, 0.1, hd - 9);
+    for (const k of ['boxLeather', 'boxCarved']) P[k].rotation.y = 0.35;
     P.pouch.rotation.y = -0.4;
-    P.hourglass.position.set(hw - 9, 0.1, hd - 9);
-    P.scroll.position.set(-hw + 7, 0.1, 6);
-    P.scroll.rotation.y = Math.PI / 2;
+    P.scroll.rotation.y = 0.12;
     P.scroll.scale.setScalar(0.8);
     P.crown.visible = false;
     for (const k of ['trayRed', 'trayGreen']) P[k].position.set(0, 0.1, TRAY_Z);
@@ -166,6 +181,12 @@ export class TableScene {
     await nextFrame();
 
     this.myDie = new Mo.D20(0x2ec4b6, 40, 3.9, new THREE.Vector3(0, Math.sin(PITCH), Math.cos(PITCH)));
+    // The opponent across the table: their commander on a medallion and their own d20.
+    this.oppDie = new Mo.D20(0x9b6cff, 40, 4.2, new THREE.Vector3(0, Math.sin(PITCH), Math.cos(PITCH)));
+    this.oppDie.group.position.set(9, 0.1, OPP_Z);
+    this.oppGroup.add(this.oppDie.group);
+    this.oppGroup.visible = false;
+    s.add(this.oppGroup);
     this.myDie.group.position.set(0, 0.7, TRAY_Z);
     this.cmdGroup.position.set(0, 0.7, TRAY_Z);
     s.add(this.myDie.group, this.cmdGroup);
@@ -233,15 +254,16 @@ export class TableScene {
     P.hourglass.visible = !a;
     P.scroll.visible = !a;
     P.trayGreen.visible = !a;
+    for (const p of Object.values(P)) if (p.userData.offscreen) p.visible = false;
     this.propFlicker.candle.light.visible = a;
     this.propFlicker.lantern.light.visible = !a;
     if (this.wear) this.scene.remove(this.wear);
-    const hw = TABLE_W / 2;
-    const hd = TABLE_D / 2;
+    const c = P.candle.position;
+    const d = P.tankard.position;
     this.wear = Mo.tableWear({
-      rings: [[hw - 9, -hd + 13, 4.6], [hw - 15, -hd + 15, 4.4], ...(a ? [[hw - 20, hd - 12, 4.2]] : [])],
-      burn: [-hw + 14, -hd + 13],
-      wax: a ? [[-hw + 17, -hd + 15, 0.6], [-hw + 18.5, -hd + 12, 0.45], [-hw + 15, -hd + 18, 0.5]] : [],
+      rings: [[d.x + 1, d.z + 3, 4.6], [d.x - 5, d.z + 5, 4.4]],
+      burn: [c.x + 5, c.z + 3],
+      wax: a ? [[c.x + 8, c.z + 5, 0.6], [c.x + 9.5, c.z + 2, 0.45], [c.x + 6, c.z + 8, 0.5]] : [],
     });
     this.scene.add(this.wear);
     this.renderer.shadowMap.needsUpdate = true;
@@ -251,16 +273,53 @@ export class TableScene {
   /** Your life total on the d20 in the dice tray. */
   setLife(life: number): void {
     if (!this.myDie) return;
-    this.myDie.set(life);
+    this.myDie.set(life, this.lifeShown);
+    this.lifeShown = true;
     this.dirty = true;
   }
 
   private dieColor = 0x2ec4b6;
+  private lifeShown = false;
+  private oppShown = '';
   setDieColor(color: number): void {
     if (!this.myDie || color === this.dieColor) return;
     this.dieColor = color;
     this.myDie.recolor(color);
     this.dirty = true;
+  }
+
+  /** The opponent across the table (life on their d20, commander art on the medallion), or nobody. */
+  setOpponent(o: { id: string; life: number; color: number; art: string | null } | null): void {
+    if (!this.oppDie || !this.M) return;
+    this.oppGroup.visible = !!o;
+    if (!o) this.oppShown = '';
+    if (o) {
+      if (o.color !== this.oppDieColor) {
+        this.oppDieColor = o.color;
+        this.oppDie.recolor(o.color);
+      }
+      // Tumble only when the same opponent's life changes, not when someone new sits across.
+      this.oppDie.set(o.life, this.oppShown === o.id);
+      this.oppShown = o.id;
+      const art = o.art ?? '';
+      if (art !== this.oppArt) {
+        this.oppArt = art;
+        const old = this.oppGroup.getObjectByName('medallion');
+        if (old) this.oppGroup.remove(old);
+        const med = Mo.medallion(this.M, art || null);
+        med.name = 'medallion';
+        med.position.set(-8, 0.1, OPP_Z - 1);
+        med.scale.setScalar(1.35);
+        this.oppGroup.add(med);
+      }
+    }
+    this.renderer.shadowMap.needsUpdate = true;
+    this.dirty = true;
+  }
+
+  /** Pointer position over the window, -0.5..0.5 each way (drives the camera drift). */
+  setPointer(x: number, y: number): void {
+    this.mouse.set(x, y);
   }
 
   /** Commander damage you've taken, as d6s in the tray beside your d20 (up to four). */
@@ -328,8 +387,9 @@ export class TableScene {
       cam.lookAt(target);
       cam.updateMatrixWorld();
       const p = corners.map((c) => c.clone().project(cam));
+      const med = new THREE.Vector3(0, 14, OPP_Z).project(cam);
       return {
-        top: Math.max(p[0].y, p[1].y),
+        top: Math.max(p[0].y, p[1].y, med.y),
         bottom: Math.min(p[2].y, p[3].y),
         xmin: Math.min(...p.map((q) => q.x)),
         xmax: Math.max(...p.map((q) => q.x)),
@@ -364,21 +424,93 @@ export class TableScene {
       } else lo = d;
     }
     place(best, centred(best));
+    this.basePos.copy(cam.position);
+    this.baseTarget.set(0, 0, centred(best));
     // Shift sideways so the board sits centred between the left and right insets.
     cam.setViewOffset(w, h, (right - left) / 2, 0, w, h);
     cam.updateProjectionMatrix();
+    this.placeProps(w, h);
+    const hp = new THREE.Vector3(0, 3.9, TRAY_Z).project(cam);
+    this.home = { x: Math.round(((hp.x + 1) / 2) * w), y: Math.round(((1 - hp.y) / 2) * h), r: 0 };
     this.css.render(this.scene, cam);
     this.dirty = true;
     this.reportLayout();
   };
 
+  /**
+   * The HTML board is drawn over the 3D table, so props must stand where the board isn't:
+   * the far corners beside the opponent's mat, and the near edge beside your dice tray.
+   * Spots are chosen on screen and projected onto the table, so they stay visible at any window size.
+   */
+  private placeProps(w: number, h: number): void {
+    const P = this.props;
+    if (!P.candle) return;
+    const ray = new THREE.Raycaster();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const hw = TABLE_W / 2 - 7;
+    const hd = TABLE_D / 2 - 5;
+    const spot = (fx: number, fy: number): THREE.Vector3 | null => {
+      const ndc = new THREE.Vector2(fx * 2 - 1, 1 - fy * 2);
+      ray.setFromCamera(ndc, this.camera);
+      const hit = new THREE.Vector3();
+      if (!ray.ray.intersectPlane(plane, hit)) return null;
+      hit.x = THREE.MathUtils.clamp(hit.x, -hw, hw);
+      hit.z = THREE.MathUtils.clamp(hit.z, -hd, hd);
+      hit.y = 0.1;
+      return hit;
+    };
+    const put = (keys: string[], fx: number, fy: number) => {
+      const at = spot(fx, fy);
+      for (const k of keys) {
+        if (!P[k]) continue;
+        if (at) P[k].position.copy(at);
+        P[k].userData.offscreen = !at;
+      }
+    };
+    const l = (this.insets.left + 20) / w;
+    const r = 1 - (this.insets.right + 30) / w;
+    put(['candle', 'lantern'], l + 0.04, 0.24);
+    put(['tankard', 'stein'], r - 0.04, 0.22);
+    put(['scroll'], l + 0.17, 0.15);
+    put(['boxLeather', 'boxCarved'], l + 0.12, 0.935);
+    put(['pouch', 'hourglass'], 0.745, 0.935);
+    this.applyProps();
+  }
+
   private reportLayout(): void {
     if (!this.myDie || !this.onLayout) return;
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    const p = new THREE.Vector3(0, 3.9, TRAY_Z).project(this.camera);
-    const q = new THREE.Vector3(3.9, 3.9, TRAY_Z).project(this.camera);
-    this.onLayout({ x: ((p.x + 1) / 2) * w, y: ((1 - p.y) / 2) * h, r: Math.abs(q.x - p.x) * (w / 2) * 1.3 });
+    const at = (x: number, y: number, z: number, size: number): Anchor => {
+      const p = new THREE.Vector3(x, y, z).project(this.camera);
+      const q = new THREE.Vector3(x + size, y, z).project(this.camera);
+      return { x: Math.round(((p.x + 1) / 2) * w), y: Math.round(((1 - p.y) / 2) * h), r: Math.round(Math.abs(q.x - p.x) * (w / 2) * 1.3) };
+    };
+    const anchors: Anchors = { me: at(0, 3.9, TRAY_Z, 3.9), home: this.home ?? undefined };
+    if (this.oppGroup.visible) anchors.opp = at(9, 4.2, OPP_Z, 4.2);
+    const key = JSON.stringify(anchors);
+    if (key === this.lastAnchors) return;
+    this.lastAnchors = key;
+    this.onLayout(anchors);
+  }
+
+  /** Ease the camera toward the mouse (and a slow idle drift). Returns true if it moved. */
+  private moveCamera(t: number, dt: number): boolean {
+    const cam = this.camera;
+    const want = this.calm ? new THREE.Vector2(0, 0) : new THREE.Vector2(this.mouse.x + Math.sin(t * 0.21) * 0.12, this.mouse.y + Math.sin(t * 0.17 + 1) * 0.1);
+    const before = this.sway.clone();
+    // Time-based easing, so the drift feels the same at any frame rate.
+    this.sway.lerp(want, 1 - Math.exp(-dt * 2.5));
+    if (this.sway.distanceTo(before) < 0.0004 && !this.dirty) return false;
+    const right = new THREE.Vector3(1, 0, 0);
+    const up = new THREE.Vector3(0, Math.cos(PITCH), -Math.sin(PITCH));
+    cam.position.copy(this.basePos).addScaledVector(right, this.sway.x * 26).addScaledVector(up, -this.sway.y * 12);
+    // Orbit around the middle of the table: near and far things shift against each other (parallax).
+    cam.lookAt(this.baseTarget);
+    cam.updateMatrixWorld();
+    this.css.render(this.scene, cam);
+    this.reportLayout();
+    return true;
   }
 
   private loop = (): void => {
@@ -388,10 +520,11 @@ export class TableScene {
     const dt = Math.min(0.1, this.clock.getDelta());
     const t = this.clock.elapsedTime;
     this.frameNo++;
-    const dieMoving = this.myDie?.tick(dt) ?? false;
-    if (this.calm && !this.dirty && !dieMoving) return;
+    const dieMoving = (this.myDie?.tick(dt) ?? false) || (this.oppDie?.tick(dt) ?? false);
+    const camMoved = this.moveCamera(t, dt);
+    if (this.calm && !this.dirty && !dieMoving && !camMoved) return;
     // Lights flicker; the low setting redraws at half rate.
-    if (this.quality === 'low' && !this.dirty && !dieMoving && this.frameNo % 2) return;
+    if (this.quality === 'low' && !this.dirty && !dieMoving && !camMoved && this.frameNo % 2) return;
     if (!this.calm) {
       for (const f of [...this.flickers, this.propFlicker[this.propSet]]) {
         const n = Math.sin(t * 17 + f.base) * 0.5 + Math.sin(t * 29 + 1.3) * 0.3 + Math.sin(t * 7.3) * 0.2;

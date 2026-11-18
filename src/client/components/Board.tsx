@@ -245,7 +245,7 @@ export function Permanent({
             </div>
           )}
           {c.types.includes('Planeswalker') && <div className="loyalty">{c.counters.loyalty ?? 0}</div>}
-          <Counters card={c} />
+          <Counters card={c} w={w} />
           {c.commander && (
             <div className="coin star">
               <svg viewBox="0 0 24 24">
@@ -285,15 +285,53 @@ function ptTone(c: CardView): string {
   return '';
 }
 
-function Counters({ card }: { card: CardView }) {
+const PIPS: Record<number, [number, number][]> = {
+  1: [[50, 50]],
+  2: [[28, 28], [72, 72]],
+  3: [[26, 26], [50, 50], [74, 74]],
+  4: [[28, 28], [72, 28], [28, 72], [72, 72]],
+  5: [[26, 26], [74, 26], [50, 50], [26, 74], [74, 74]],
+  6: [[28, 24], [72, 24], [28, 50], [72, 50], [28, 76], [72, 76]],
+};
+
+/**
+ * A six-sided die built from six faces in CSS 3D. On the 3D table it stands on the card with real depth;
+ * the top face shows the number and the sides show pips like a real die.
+ */
+export function Die6({ value, kind, size }: { value: number; kind: string; size: number }) {
+  const side = (n: number) => (
+    <svg viewBox="0 0 100 100">
+      {PIPS[n].map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r="9" />
+      ))}
+    </svg>
+  );
+  return (
+    <div className={`die6 die-${kind}`} style={{ ['--s' as string]: `${size}px` }}>
+      <div className="f top">
+        <span>{value}</span>
+      </div>
+      <div className="f front">{side(((value + 1) % 6) + 1)}</div>
+      <div className="f right">{side(((value + 3) % 6) + 1)}</div>
+      <div className="f left">{side(((value + 2) % 6) + 1)}</div>
+      <div className="f back">{side(((value + 4) % 6) + 1)}</div>
+      <div className="f bottom" />
+    </div>
+  );
+}
+
+/** Counters on a permanent: a die per kind (+1/+1 green, -1/-1 red, others gold with a label). */
+function Counters({ card, w }: { card: CardView; w: number }) {
   const list = Object.entries(card.counters).filter(([k, n]) => n > 0 && k !== 'loyalty');
   if (!list.length) return null;
+  const size = Math.round(Math.max(14, Math.min(40, w * 0.3)));
   return (
-    <div className="ctrs">
+    <div className="ctr-dice">
       {list.map(([k, n]) => (
-        <span key={k} className={`ctr ${k === '-1/-1' ? 'neg' : ''}`}>
-          {k === '+1/+1' ? `+${n}` : k === '-1/-1' ? `−${n}` : `${n} ${k}`}
-        </span>
+        <div key={k} className="ctr-die">
+          <Die6 value={n} kind={k === '+1/+1' ? 'plus' : k === '-1/-1' ? 'minus' : 'other'} size={size} />
+          {k !== '+1/+1' && k !== '-1/-1' && <span className="ctr-label">{k}</span>}
+        </div>
       ))}
     </div>
   );

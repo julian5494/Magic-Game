@@ -687,3 +687,41 @@ export class D6 {
     this.mats[2].needsUpdate = true;
   }
 }
+
+/** A commander portrait in a gold frame on a small stand. */
+export function medallion(M: Mats, artUrl: string | null): THREE.Group {
+  const g = new THREE.Group();
+  const face = new THREE.MeshStandardMaterial({ color: 0x2a1c12, roughness: 0.55 });
+  if (artUrl) {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    loader.load(artUrl, (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      // Crop the art to a square around its centre.
+      const img = t.image as HTMLImageElement;
+      const aspect = img.width / img.height;
+      t.repeat.set(aspect > 1 ? 1 / aspect : 1, aspect > 1 ? 1 : aspect);
+      t.offset.set((1 - t.repeat.x) / 2, (1 - t.repeat.y) / 2);
+      face.map = t;
+      face.color.set(0xffffff);
+      face.needsUpdate = true;
+    });
+  }
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(4.1, 48), face);
+  disc.position.set(0, 6.6, 0.42);
+  const back = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 4.6, 0.7, 48), M.gold);
+  back.rotation.x = Math.PI / 2;
+  back.position.set(0, 6.6, 0);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(4.3, 0.36, 12, 64), M.gold);
+  rim.position.set(0, 6.6, 0.42);
+  const foot = new THREE.Mesh(lathe([[0, 0], [3.2, 0], [3, 0.6], [1, 1.4], [0.7, 2.6], [0, 2.6]], 32), M.gold);
+  g.add(disc, back, rim, foot);
+  // Lean back a little, toward the light and the player.
+  g.children.forEach((c) => {
+    if (c !== foot) {
+      c.position.applyAxisAngle(new THREE.Vector3(1, 0, 0), -0.25);
+      c.rotation.x += -0.25;
+    }
+  });
+  return shadowed(g);
+}

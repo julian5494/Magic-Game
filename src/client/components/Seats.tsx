@@ -143,9 +143,18 @@ export function CommandSlot({
         if (!c) return null;
         const props = cardProps(id);
         return (
-          <div key={id} className={`cmd-card ${props.selectable ? 'castable' : ''}`} onClick={(e) => { e.stopPropagation(); onCardClick(id); }}>
-            <div style={{ width: w, height: Math.round(w * 1.396) }}>
-              <Card card={c} size="large" showTapped={false} selectable={props.selectable} selected={props.selected} onHover={onHover} extra={props.extra} />
+          <div key={id} className={`cmd-card ${props.selectable ? 'castable' : ''}`}>
+            {/* Click, double-click and drag live on this wrapper: on the 3D table the browser hit-tests the wrapper, not the card inside it. */}
+            <div
+              className="cmd-hit"
+              style={{ width: w, height: Math.round(w * 1.396) }}
+              {...props.extra}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCardClick(id);
+              }}
+            >
+              <Card card={c} size="large" showTapped={false} selectable={props.selectable} selected={props.selected} onHover={onHover} />
             </div>
             <span className="slot-tax">Tax +{c.commanderTax ?? 0}</span>
           </div>

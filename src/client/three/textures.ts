@@ -184,10 +184,12 @@ export function leatherGrainDataUrl(size = 256, seed = 4): string {
       const nw = Math.sin(b) * R1;
       const peb = 1 - Math.abs(N.noise(nx / 2.2 + nz / 2.2, ny / 2.2 + nw / 2.2));
       const peb2 = 1 - Math.abs(N.noise(nx / 5 + 40 + nz / 7, ny / 5 + nw / 7));
-      const v = clamp(0.45 + (peb - 0.6) * 0.5 + (peb2 - 0.6) * 0.35);
+      // Shadows in the pebble's hollows, a faint sheen on the bumps (no blend mode needed).
+      const v = clamp(0.5 + (peb - 0.6) * 0.5 + (peb2 - 0.6) * 0.35);
       const i = (y * size + x) * 4;
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = v * 255;
-      img.data[i + 3] = 255;
+      const light = v > 0.5;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = light ? 255 : 0;
+      img.data[i + 3] = light ? (v - 0.5) * 120 : (0.5 - v) * 260;
     }
   }
   ctx.putImageData(img, 0, 0);

@@ -128,10 +128,10 @@ function effectsScene(): GameView {
     card('Darksteel Colossus', 'me', ['Artifact', 'Creature'], { kw: ['Trample', 'Indestructible'], pt: [11, 11] }),
     card('Sphinx of Jwar Isle', 'me', ['Creature'], { kw: ['Flying', 'Shroud'], pt: [5, 5], colors: ['U'] }),
     card('Adeline, Resplendent Cathar', 'me', ['Legendary', 'Creature'], { kw: ['Vigilance'], pt: [4, 4], ward: '{2}', colors: ['W'] }),
-    card('Grizzly Bears', 'me', ['Creature'], { pt: [2, 2], colors: ['G'] }),
-    card('Grizzly Bears', 'me', ['Creature'], { pt: [2, 2], colors: ['G'] }),
+    card('Grizzly Bears', 'me', ['Creature'], { pt: [5, 5], basePower: 2, baseToughness: 2, colors: ['G'], counters: { '+1/+1': 3 } }),
+    card('Grizzly Bears', 'me', ['Creature'], { pt: [1, 1], basePower: 2, baseToughness: 2, colors: ['G'], counters: { '-1/-1': 1 } }),
     card('Sol Ring', 'me', ['Artifact']),
-    card('Arcane Signet', 'me', ['Artifact']),
+    card('Arcane Signet', 'me', ['Artifact'], { counters: { charge: 2 } }),
     card('Glorious Anthem', 'me', ['Enchantment'], { colors: ['W'] }),
     ...lands('me', 'Forest', 5, 2),
     ...lands('me', 'Plains', 3),
@@ -144,6 +144,7 @@ function effectsScene(): GameView {
     card('Craw Wurm', 'p2', ['Creature'], { pt: [6, 4], kw: ['Trample'], colors: ['G'] }),
     card('Llanowar Elves', 'p2', ['Creature'], { pt: [1, 1], colors: ['G'] }),
     card('Swords to Plowshares', 'p2', ['Instant'], { zone: 'graveyard' }),
+    card('Talrand, Sky Summoner', 'p2', ['Legendary', 'Creature'], { pt: [2, 2], commander: true, colors: ['U'] }),
     ...lands('p2', 'Island', 6, 6),
   ];
   const hand = ['Swords to Plowshares', 'Thragtusk', 'Lightning Greaves', 'Forest'].map((nm) => card(nm, 'me', ['Card'], { zone: 'hand' }));
@@ -152,7 +153,7 @@ function effectsScene(): GameView {
     player('me', 'You', 38, [cmd.id], {
       mana: { total: 12, groups: [{ produces: ['G'], amount: 3, costly: 0 }, { produces: ['W'], amount: 3, costly: 0 }, { produces: ['W', 'U', 'B', 'R', 'G'], amount: 4, costly: 2 }, { produces: ['C'], amount: 2, costly: 0 }] },
     }),
-    player('p2', 'Morgan', 31, [], { graveyard: [opp[2].id] }),
+    player('p2', 'Morgan', 31, [opp[3].id], { graveyard: [opp[2].id] }),
     player('p3', 'Riley', 17, [others[0].id], { commanderDamage: [] }),
     player('p4', 'Alex', 40, [others[5].id]),
   ];

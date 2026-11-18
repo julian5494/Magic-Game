@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
+import type { Anchors } from '../three/TableScene';
 import { useTable3D, useTableSettings, type Quality3D } from '../three/useTable3D';
 import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, Step, Target, TargetSpecView } from '../../engine/types';
 import type { CardView, GameView, PlayerView, StackView } from '../../engine/view';
 import type { ClientMessage } from '../../shared/protocol';
 import type { NetState } from '../net';
 import { previewCombat, type CombatPreview, type PlannedAttack } from '../combat';
-import { Battlefield, MatPicker, SEAT_COLORS, useMats, type PermProps, type PreviewMark } from './Board';
+import { artUrl, Battlefield, MatPicker, SEAT_COLORS, useMats, type PermProps, type PreviewMark } from './Board';
 import { Card, CardPreview, IMAGES_KEY, imagesEnabled, ManaText } from './Card';
 import { DecisionModal, LogPanel, nameOfPlayer, PhaseTracker, StackPanel, STEP_LABELS, XModal, ZoneModal, type ZoneOpen } from './parts';
 import { CmdDamage, CommandSlot, D20, ManaBar, MatPiles, Portrait } from './Seats';
@@ -76,13 +77,17 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [, forceRender] = useState(0);
   const [hold, setHold] = useState(false);
   const [drag, setDrag] = useState<{ id: CardId; kind: DragKind } | null>(null);
+  /** Where the pointer is while aiming an attacker or blocker. */
+  const [aim, setAim] = useState<{ x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
   const [topPin, setTopPin] = useState<PlayerId | null>(null);
   const [fullBoard, setFullBoard] = useState<PlayerId | null>(null);
   const [calm, setCalm] = useState(() => readFlag(CALM_KEY));
   const table = useTableSettings();
   const tableRef = useRef<HTMLDivElement>(null);
   const { scene: table3d, boardEl } = useTable3D(tableRef, table.quality);
-  const [dieAt, setDieAt] = useState<{ x: number; y: number; r: number } | null>(null);
+  const [anchors, setAnchors] = useState<Anchors>({});
+  const dieAt = table3d ? anchors.me ?? null : null;
   const [mats, setMat] = useMats();
   const [clickToPlay, setClickToPlay] = useState(readClickToPlay);
   const [selectedHand, setSelectedHand] = useState<CardId | null>(null);
@@ -191,7 +196,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   // ---------- Clicks ----------
   const onCardClick = (id: CardId) => {
     const card = view.cards[id];
-    if (!card) return;
+    if (!card || suppressClick.current) return;
     if (sacrificing) {
       if (sacrificing.includes(id)) advancePending({ ...pending!, sacrifice: id });
       return;
@@ -254,8 +259,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       (a) => a.cardId === id && a.type === 'cast' && a.targets.length === 1 && a.xMax === undefined && !a.sacrificeOptions && a.targets[0].options.some((o) => sameTarget(o, t)),
     );
 
-  const canDrop = (t: DropTarget): boolean => {
-    if (!drag) return false;
+  type Drag = { id: CardId; kind: DragKind };
+  const canDrop = (t: DropTarget, d: Drag | null = drag): boolean => {
+    if (!d) return false;
+    const drag = d;
     if (drag.kind === 'hand') {
       if (t.type === 'area') return t.owner === view.you;
       return !!directCast(drag.id, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id });
@@ -272,10 +279,9 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     return false;
   };
 
-  const handleDrop = (t: DropTarget) => {
-    const d = drag;
+  const handleDrop = (t: DropTarget, d: Drag | null = drag) => {
     setDrag(null);
-    if (!d || !canDrop(t)) return;
+    if (!d || !canDrop(t, d)) return;
     if (d.kind === 'hand') {
       if (t.type !== 'area') {
         const a = directCast(d.id, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id })!;
@@ -295,6 +301,56 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     if (t.type === 'card') next[d.id] = t.id;
     else delete next[d.id];
     setBlocks(next);
+  };
+
+  /** What's under the pointer, as a drop target for `d` (cards first, then players, then a board). */
+  const dropTargetAt = (x: number, y: number, d: Drag): DropTarget | null => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return null;
+    const cardEl = el.closest('[data-card-id]');
+    const cid = cardEl?.getAttribute('data-card-id');
+    if (cid && cid !== d.id && canDrop({ type: 'card', id: cid }, d)) return { type: 'card', id: cid };
+    const pid = el.closest('[data-player-id]')?.getAttribute('data-player-id');
+    if (pid && canDrop({ type: 'player', id: pid }, d)) return { type: 'player', id: pid };
+    const owner = el.closest('[data-owner]')?.getAttribute('data-owner');
+    if (owner && canDrop({ type: 'area', owner }, d)) return { type: 'area', owner };
+    return null;
+  };
+
+  /**
+   * Attackers and blockers aren't dragged around: pressing on one draws an arrow from it to the pointer,
+   * and letting go over a target assigns it. A press without moving is an ordinary click.
+   */
+  const startAim = (e: React.PointerEvent, d: Drag) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let started = false;
+    const move = (ev: PointerEvent) => {
+      if (!started && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 7) return;
+      if (!started) {
+        started = true;
+        setHover(null);
+        setDrag(d);
+      }
+      setAim({ x: ev.clientX, y: ev.clientY });
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (!started) return;
+      suppressClick.current = true;
+      setTimeout(() => (suppressClick.current = false), 0);
+      setAim(null);
+      const t = ev.type === 'pointerup' ? dropTargetAt(ev.clientX, ev.clientY, d) : null;
+      if (t) handleDrop(t, d);
+      else setDrag(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   };
 
   const dropProps = (t: DropTarget): Extra => {
@@ -356,7 +412,9 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const extra: Extra = { ...dropProps({ type: 'card', id }) };
     const dropOk = !!drag && drag.id !== id && canDrop({ type: 'card', id });
     const kind = dragKindFor(id);
-    if (kind) {
+    if (kind === 'attacker' || kind === 'blocker') {
+      extra.onPointerDown = (e) => startAim(e, { id, kind });
+    } else if (kind) {
       extra.draggable = true;
       extra.onDragStart = (e: DragEvent) => {
         e.dataTransfer.setData('text/plain', id);
@@ -532,6 +590,9 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   for (const s of view.stack) {
     for (const t of s.targets) if (t) arrows.push({ from: `[data-stack-id="${s.id}"]`, to: toSel(t), kind: 'target' });
   }
+  if (drag && aim && drag.kind !== 'hand') {
+    arrows.push({ from: `[data-card-id="${drag.id}"]`, to: '', toPoint: aim, kind: drag.kind === 'blocker' ? 'block' : 'attack', pending: true });
+  }
 
   const playerSelectable = (pid: PlayerId) =>
     (!!targeting && isTargetable({ type: 'player', id: pid })) ||
@@ -592,6 +653,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const piles = <MatPiles p={p} view={view} onZone={setZone} w={pileW} flip={side === 'far'} />;
     return (
       <section
+        data-owner={p.id}
         className={`mat ${side} leather-${matOf(p.id)} ${view.activePlayer === p.id ? 'active' : ''} ${drag && canDrop({ type: 'area', owner: p.id }) ? 'drop-zone' : ''}`}
         style={{ ['--seat' as string]: colorOf(p.id) }}
         {...dropProps({ type: 'area', owner: p.id })}
@@ -635,7 +697,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   // Keep the 3D table in step with the game.
   useEffect(() => {
     if (!table3d) return;
-    table3d.onLayout = setDieAt;
+    table3d.onLayout = setAnchors;
     table3d.setInsets({ top: 64, bottom: 128, left: 46, right: 86 });
     return () => {
       table3d.onLayout = null;
@@ -651,6 +713,17 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       me.commanderDamage.map((d) => ({ amount: d.amount, color: parseInt(colorOf(view.cards[d.commander]?.owner ?? '').slice(1), 16) || 0x9b6cff })),
     );
   }, [table3d, cmdKey]);
+  const topCmd = topP?.commanders.map((id) => view.cards[id]).find(Boolean);
+  const topArt = topCmd ? artUrl(topCmd) : null;
+  useEffect(() => {
+    table3d?.setOpponent(topP && !topP.lost ? { id: topP.id, life: topP.life, color: parseInt(colorOf(topP.id).slice(1), 16), art: topArt } : null);
+  }, [table3d, topP?.id, topP?.life, topP?.lost, topArt]);
+  useEffect(() => {
+    if (!table3d) return;
+    const onMove = (e: PointerEvent) => table3d.setPointer(e.clientX / window.innerWidth - 0.5, e.clientY / window.innerHeight - 0.5);
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [table3d]);
   useEffect(() => table3d?.setMonarch(view.monarch === view.you ? 'me' : view.monarch && view.monarch === topP?.id ? 'across' : null), [table3d, view.monarch, topP?.id]);
 
   // The table surface: drawn flat in CSS, or laid on the 3D tavern table when it's running.
@@ -682,8 +755,9 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       {/* Across the table: who it is, their life, and the seat controls. */}
       {topP && (
         <div className="hud topseat">
-          <Portrait p={topP} view={view} color={colorOf(topP.id)} />
-          {die(topP, 62)}
+          {/* On the 3D table their portrait and d20 are models on the table edge; these stay for the flat table. */}
+          {!table3d && <Portrait p={topP} view={view} color={colorOf(topP.id)} />}
+          {!table3d && die(topP, 62)}
           <div className="nameplate">
             {topP.name}
             <small>
@@ -718,7 +792,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
                   </button>
                   <MatPicker value={matOf(p.id)} onChange={(m) => setMat(p.id, m)} />
                 </div>
-                <div className={`glass leather-${matOf(p.id)}`} {...dropProps({ type: 'area', owner: p.id })}>
+                <div className={`glass leather-${matOf(p.id)}`} data-owner={p.id} {...dropProps({ type: 'area', owner: p.id })}>
                   {board(p.id, 'tile', true, true)}
                 </div>
                 <div className="tp-piles">
@@ -789,6 +863,13 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         </div>
       )}
 
+      {/* The opponent's 3D d20: an invisible spot over it takes clicks, drops and shows the combat preview. */}
+      {table3d && topP && anchors.opp && (
+        <div className="my-die3d opp" style={{ left: anchors.opp.x, top: anchors.opp.y, width: anchors.opp.r * 2, height: anchors.opp.r * 2 }}>
+          {die(topP, Math.round(anchors.opp.r * 2), true)}
+        </div>
+      )}
+
       {/* With the 3D table your d20 sits in the dice tray; this invisible spot over it takes clicks and drops. */}
       {table3d && dieAt && (
         <div className="my-die3d" style={{ left: dieAt.x, top: dieAt.y, width: dieAt.r * 2, height: dieAt.r * 2 }}>
@@ -798,7 +879,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
       {/* The table's front edge: your hand fanned around your d20, and your mana. */}
       <div className="hud strip">
-        <div className={`hand-fan ${handOpen ? 'open' : ''}`} style={table3d && dieAt ? { left: dieAt.x } : undefined}>
+        <div className={`hand-fan ${handOpen ? 'open' : ''}`} style={table3d && anchors.home ? { left: anchors.home.x } : undefined}>
           {view.hand.map((id, i) => {
             const props = cardProps(id);
             const pos = handPos(i);
@@ -987,6 +1068,8 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 interface Arrow {
   from: string;
   to: string;
+  /** Point the arrow at a screen position instead of an element (aiming). */
+  toPoint?: { x: number; y: number };
   kind: 'attack' | 'block' | 'target' | 'trample';
   pending?: boolean;
   label?: string;
@@ -1000,12 +1083,17 @@ interface Line {
   kind: string;
   pending?: boolean;
   label?: string;
+  free?: boolean;
 }
 
-/** Draws curved arrows between on-screen elements (re-measured as the layout changes). */
+/**
+ * Draws curved arrows between on-screen elements. Positions are re-measured every animation frame,
+ * so arrows stay attached when the 3D camera moves or cards shift.
+ */
 function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
   const [lines, setLines] = useState<Line[]>([]);
-  const key = JSON.stringify(arrows);
+  const arrowsRef = useRef(arrows);
+  arrowsRef.current = arrows;
   const last = useRef('');
   const measure = useCallback(() => {
     const center = (sel: string) => {
@@ -1015,27 +1103,28 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
       if (!r.width) return null;
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     };
-    const next = (JSON.parse(key) as Arrow[])
+    const next = arrowsRef.current
       .map((a) => {
         const p = center(a.from);
-        const q = center(a.to);
-        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending, label: a.label } : null;
+        const q = a.toPoint ?? center(a.to);
+        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending, label: a.label, free: !!a.toPoint } : null;
       })
       .filter(Boolean) as Line[];
-    const sig = JSON.stringify(next.map((l) => [Math.round(l.x1), Math.round(l.y1), Math.round(l.x2), Math.round(l.y2), l.kind, l.label]));
+    const sig = JSON.stringify(next.map((l) => [Math.round(l.x1), Math.round(l.y1), Math.round(l.x2), Math.round(l.y2), l.kind, l.label, l.pending]));
     if (sig !== last.current) {
       last.current = sig;
       setLines(next);
     }
-  }, [key]);
+  }, []);
   useLayoutEffect(measure);
   useEffect(() => {
-    const t = setInterval(measure, 300);
-    window.addEventListener('resize', measure);
-    return () => {
-      clearInterval(t);
-      window.removeEventListener('resize', measure);
+    let raf = 0;
+    const tick = () => {
+      if (arrowsRef.current.length || last.current !== '[]') measure();
+      raf = requestAnimationFrame(tick);
     };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [measure]);
   if (!lines.length) return null;
   return (
@@ -1052,7 +1141,7 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
         const dx = l.x2 - l.x1;
         const dy = l.y2 - l.y1;
         const len = Math.hypot(dx, dy) || 1;
-        const shorten = Math.min(26, len / 3);
+        const shorten = l.free ? 0 : Math.min(26, len / 3);
         const x2 = l.x2 - (dx / len) * shorten;
         const y2 = l.y2 - (dy / len) * shorten;
         const bend = Math.min(60, len * 0.18);
