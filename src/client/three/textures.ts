@@ -441,3 +441,210 @@ export function ringStain(): THREE.CanvasTexture {
   ctx.stroke();
   return tex(c);
 }
+
+/** Read a grayscale canvas back as a height field (0..1), softened with a small box blur. */
+function heightOf(c: HTMLCanvasElement, blur = 1): Float32Array {
+  const w = c.width;
+  const h = c.height;
+  const px = ctx2d(c).getImageData(0, 0, w, h).data;
+  let hf = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) hf[i] = px[i * 4] / 255;
+  for (let pass = 0; pass < blur; pass++) {
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        let s = 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = Math.min(w - 1, Math.max(0, x + dx));
+            const yy = Math.min(h - 1, Math.max(0, y + dy));
+            s += hf[yy * w + xx];
+            n++;
+          }
+        out[y * w + x] = s / n;
+      }
+    hf = out;
+  }
+  return hf;
+}
+
+/** Hand-hammered metal: overlapping shallow dents (normal map) and a matching roughness map. */
+export function hammered(size = 256, seed = 11): { normalMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture } {
+  const R = rng(seed);
+  const hf = new Float32Array(size * size).fill(1);
+  for (let k = 0; k < 420; k++) {
+    const cx = R() * size;
+    const cy = R() * size;
+    const r = 6 + R() * 12;
+    const depth = 0.25 + R() * 0.3;
+    for (let y = Math.floor(cy - r); y <= cy + r; y++)
+      for (let x = Math.floor(cx - r); x <= cx + r; x++) {
+        const d = Math.hypot(x - cx, y - cy) / r;
+        if (d >= 1) continue;
+        const xx = (x + size) % size;
+        const yy = (y + size) % size;
+        const v = 1 - depth * (1 - d * d);
+        hf[yy * size + xx] = Math.min(hf[yy * size + xx], v);
+      }
+  }
+  const rc = canvas(size, size);
+  const ctx = ctx2d(rc);
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const v = 90 + (1 - hf[i]) * 160;
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const normalMap = normalFromHeight(hf, size, size, 5);
+  const roughnessMap = tex(rc, { srgb: false });
+  for (const t of [normalMap, roughnessMap]) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return { normalMap, roughnessMap };
+}
+
+/** A struck coin face: a raised rim, a ring of beads, and a crown in the middle. */
+export function coinFace(size = 128): { map: THREE.CanvasTexture; normalMap: THREE.CanvasTexture } {
+  const c = canvas(size, size);
+  const ctx = ctx2d(c);
+  const m = size / 2;
+  ctx.fillStyle = '#9a9a9a';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = size * 0.07;
+  ctx.beginPath();
+  ctx.arc(m, m, size * 0.45, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#d8d8d8';
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(m + Math.cos(a) * size * 0.35, m + Math.sin(a) * size * 0.35, size * 0.018, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // crown
+  ctx.fillStyle = '#f0f0f0';
+  ctx.beginPath();
+  const s = size * 0.2;
+  ctx.moveTo(m - s, m + s * 0.6);
+  ctx.lineTo(m - s, m - s * 0.4);
+  ctx.lineTo(m - s * 0.5, m + s * 0.1);
+  ctx.lineTo(m, m - s * 0.75);
+  ctx.lineTo(m + s * 0.5, m + s * 0.1);
+  ctx.lineTo(m + s, m - s * 0.4);
+  ctx.lineTo(m + s, m + s * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillRect(m - s, m + s * 0.75, s * 2, s * 0.3);
+  const hf = heightOf(c, 1);
+  // Color: gold with darker recesses, so the design reads even without the light catching it.
+  const col = canvas(size, size);
+  const cx = ctx2d(col);
+  const img = cx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const v = 0.8 + hf[i] * 0.3;
+    img.data[i * 4] = Math.min(255, 228 * v);
+    img.data[i * 4 + 1] = Math.min(255, 178 * v);
+    img.data[i * 4 + 2] = Math.min(255, 84 * v);
+    img.data[i * 4 + 3] = 255;
+  }
+  cx.putImageData(img, 0, 0);
+  return { map: tex(col), normalMap: normalFromHeight(hf, size, size, 3) };
+}
+
+/**
+ * Marks cut into the table with a knife: a tally of games won and a little rune ring.
+ * Returns an alpha decal (dark grooves) and its normal map.
+ */
+export function carving(kind: 'tally' | 'rune', size = 256): { map: THREE.CanvasTexture; normalMap: THREE.CanvasTexture } {
+  const c = canvas(size, size);
+  const ctx = ctx2d(c);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#000000';
+  ctx.lineCap = 'round';
+  const R = rng(kind === 'tally' ? 3 : 8);
+  const cut = (pts: number[][], wdt: number) => {
+    ctx.lineWidth = wdt;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const p of pts.slice(1)) ctx.lineTo(p[0] + (R() - 0.5) * 2, p[1] + (R() - 0.5) * 2);
+    ctx.stroke();
+  };
+  if (kind === 'tally') {
+    for (let g = 0; g < 2; g++) {
+      const ox = 30 + g * 110;
+      const n = g === 0 ? 5 : 3;
+      for (let i = 0; i < Math.min(n, 4); i++) cut([[ox + i * 18, 70 + R() * 6], [ox + i * 18 + (R() - 0.5) * 6, 180 + R() * 6]], 6);
+      if (n === 5) cut([[ox - 10, 160], [ox + 70, 90]], 6);
+    }
+  } else {
+    const m = size / 2;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(m, m, 88, 0.2, Math.PI * 2 - 0.1);
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(m, m, 70, 0, Math.PI * 2);
+    ctx.stroke();
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2;
+      const x = m + Math.cos(a) * 79;
+      const y = m + Math.sin(a) * 79;
+      cut([[x - 5, y - 6], [x + 5, y + 6]], 3);
+      cut([[x + 5, y - 6], [x, y + 6]], 3);
+    }
+    // a five-pointed star in the middle
+    const pts: number[][] = [];
+    for (let i = 0; i <= 5; i++) {
+      const a = -Math.PI / 2 + (i * 4 * Math.PI) / 5;
+      pts.push([m + Math.cos(a) * 52, m + Math.sin(a) * 52]);
+    }
+    cut(pts, 5);
+  }
+  const hf = heightOf(c, 2);
+  const col = canvas(size, size);
+  const cx = ctx2d(col);
+  const img = cx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const depth = 1 - hf[i];
+    // Fresh cuts show pale wood at the edges and dark grime in the bottom of the groove.
+    const pale = smooth(0.05, 0.3, depth) * (1 - smooth(0.5, 0.8, depth));
+    const dark = smooth(0.45, 0.9, depth);
+    img.data[i * 4] = mix(196, 38, dark);
+    img.data[i * 4 + 1] = mix(150, 20, dark);
+    img.data[i * 4 + 2] = mix(96, 10, dark);
+    img.data[i * 4 + 3] = clamp((pale * 0.55 + dark * 0.9) * 255, 0, 255);
+  }
+  cx.putImageData(img, 0, 0);
+  return { map: tex(col), normalMap: normalFromHeight(hf, size, size, 4) };
+}
+
+/** Tooled leather: a raised knotwork ring for the deck box lid (height drawn as gray, returned as a normal map). */
+export function tooledEmblem(size = 256): THREE.CanvasTexture {
+  const c = canvas(size, size);
+  const ctx = ctx2d(c);
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, size, size);
+  const m = size / 2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.arc(m, m, 96, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = '#303030';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(m, m, 108, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 7;
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 - Math.PI / 2;
+    ctx.beginPath();
+    ctx.arc(m + Math.cos(a) * 34, m + Math.sin(a) * 34, 46, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  return normalFromHeight(heightOf(c, 2), size, size, 3);
+}

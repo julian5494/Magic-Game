@@ -10,6 +10,12 @@ export interface Mats {
   pewter: THREE.MeshStandardMaterial;
   gold: THREE.MeshStandardMaterial;
   brass: THREE.MeshStandardMaterial;
+  /** Hand-forged iron and hammered pewter: the same metals with dents in them. */
+  ironH: THREE.MeshStandardMaterial;
+  pewterH: THREE.MeshStandardMaterial;
+  steel: THREE.MeshStandardMaterial;
+  /** Struck gold coin faces (use on the caps of a cylinder: [rim, face, face]). */
+  coin: THREE.Material[];
 }
 
 /** A light that flickers: its intensity and flame sprites are driven each frame. */
@@ -32,13 +38,50 @@ const shadowed = <O extends THREE.Object3D>(o: O, cast = true, receive = true): 
 };
 
 export function materials(): Mats {
+  const ham = T.hammered();
+  const iron = new THREE.MeshStandardMaterial({ color: 0x2b2724, metalness: 0.85, roughness: 0.55 });
+  const pewter = new THREE.MeshStandardMaterial({ color: 0xa7adb5, metalness: 1, roughness: 0.32 });
+  const gold = new THREE.MeshStandardMaterial({ color: 0xd9a948, metalness: 1, roughness: 0.28 });
+  const face = T.coinFace();
+  const coinFaceMat = new THREE.MeshStandardMaterial({ map: face.map, normalMap: face.normalMap, metalness: 1, roughness: 0.38 });
   return {
     oak: T.oakAtlas(),
-    iron: new THREE.MeshStandardMaterial({ color: 0x2b2724, metalness: 0.85, roughness: 0.55 }),
-    pewter: new THREE.MeshStandardMaterial({ color: 0xa7adb5, metalness: 1, roughness: 0.32 }),
-    gold: new THREE.MeshStandardMaterial({ color: 0xd9a948, metalness: 1, roughness: 0.28 }),
+    iron,
+    pewter,
+    gold,
     brass: new THREE.MeshStandardMaterial({ color: 0xb8893c, metalness: 1, roughness: 0.4 }),
+    ironH: new THREE.MeshStandardMaterial({ color: 0x2e2a26, metalness: 0.8, roughness: 1, roughnessMap: ham.roughnessMap, normalMap: ham.normalMap, normalScale: new THREE.Vector2(0.6, 0.6) }),
+    pewterH: new THREE.MeshStandardMaterial({ color: 0xa9afb7, metalness: 1, roughness: 0.6, roughnessMap: ham.roughnessMap, normalMap: ham.normalMap, normalScale: new THREE.Vector2(0.45, 0.45) }),
+    steel: new THREE.MeshStandardMaterial({ color: 0xd4d8e0, metalness: 0.55, roughness: 0.42 }),
+    coin: [gold, coinFaceMat, coinFaceMat],
   };
+}
+
+/**
+ * What metal and glass reflect: a dim, warm room with the hearth glowing behind the table,
+ * the lamp overhead and a couple of candle-lit windows. Rendered once into an environment map.
+ */
+export function tavernEnvironment(): THREE.Scene {
+  const s = new THREE.Scene();
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(60, 24, 60), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x2a1a10).multiplyScalar(0.35), side: THREE.BackSide }));
+  shell.position.y = 8;
+  s.add(shell);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x120a06) }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -3.9;
+  s.add(floor);
+  const glow = (color: number, k: number, w: number, h: number, x: number, y: number, z: number) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k), side: THREE.DoubleSide }));
+    m.position.set(x, y, z);
+    m.lookAt(0, 0, 0);
+    s.add(m);
+  };
+  glow(0xff7a2a, 3.5, 12, 7, 3, 1, -28); // hearth
+  glow(0xffd2a0, 7, 10, 10, -1, 19, 4); // lamp above the table
+  glow(0xffb060, 5, 3, 4, -26, 8, -10); // sconce
+  glow(0xffb060, 5, 3, 4, 26, 8, -14); // sconce
+  glow(0x6a7aa8, 1.6, 8, 10, 28, 9, 16); // cold window light
+  return s;
 }
 
 /** A material that samples one plank strip of the oak atlas. */
@@ -153,6 +196,234 @@ export function tableWear({ rings = [] as number[][], burn = null as number[] | 
     m.castShadow = true;
     g.add(m);
   }
+  return g;
+}
+
+/** Forged iron corner brackets, wrapped over the edge and riveted, on all four corners. */
+export function tableIron(M: Mats, W: number, D: number): THREE.Group {
+  const g = new THREE.Group();
+  const thick = 5.5;
+  const L = 13;
+  const bw = 2.8;
+  const rivet = new THREE.SphereGeometry(0.42, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+  for (const sx of [-1, 1])
+    for (const sz of [-1, 1]) {
+      const c = new THREE.Group();
+      // On top: an L along both edges, with a diagonal brace between them.
+      const top = 0.48;
+      const a = new THREE.Mesh(new RoundedBoxGeometry(L, 0.32, bw, 2, 0.12), M.ironH);
+      a.position.set(-L / 2 + 0.4, top, -bw / 2 + 0.4);
+      const b = new THREE.Mesh(new RoundedBoxGeometry(bw, 0.32, L, 2, 0.12), M.ironH);
+      b.position.set(-bw / 2 + 0.4, top, -L / 2 + 0.4);
+      const brace = new THREE.Mesh(new RoundedBoxGeometry(L * 0.62, 0.3, 1.5, 2, 0.1), M.ironH);
+      brace.position.set(-L * 0.36, top, -L * 0.36);
+      brace.rotation.y = Math.PI / 4;
+      // Down the two outer faces.
+      const fa = new THREE.Mesh(new RoundedBoxGeometry(L, thick + 1, 0.32, 2, 0.12), M.ironH);
+      fa.position.set(-L / 2 + 0.4, -thick / 2 + 0.2, 0.55);
+      const fb = new THREE.Mesh(new RoundedBoxGeometry(0.32, thick + 1, L, 2, 0.12), M.ironH);
+      fb.position.set(0.55, -thick / 2 + 0.2, -L / 2 + 0.4);
+      c.add(a, b, brace, fa, fb);
+      for (const t of [0.15, 0.5, 0.85]) {
+        const r1 = new THREE.Mesh(rivet, M.iron);
+        r1.position.set(-L * t + 0.4, top + 0.15, -bw / 2 + 0.4);
+        const r2 = new THREE.Mesh(rivet, M.iron);
+        r2.position.set(-bw / 2 + 0.4, top + 0.15, -L * t + 0.4);
+        c.add(r1, r2);
+      }
+      // The bracket is modelled for the (+x, +z) corner; mirror it for the others.
+      c.scale.set(sx, 1, sz);
+      c.position.set((sx * W) / 2, 0, (sz * (D + 1.5)) / 2);
+      g.add(c);
+    }
+  return shadowed(g, true, true);
+}
+
+/** A knife-cut decal lying on the table. */
+export function carvedMark(kind: 'tally' | 'rune', size: number): THREE.Mesh {
+  const t = T.carving(kind);
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(size, size),
+    new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, normalScale: new THREE.Vector2(1.4, 1.4), transparent: true, depthWrite: false, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -2 }),
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.receiveShadow = true;
+  return m;
+}
+
+/** A dagger stuck point-first in the table. */
+export function dagger(M: Mats): THREE.Group {
+  const g = new THREE.Group();
+  const blade = new THREE.Shape();
+  blade.moveTo(0, 0);
+  blade.lineTo(0.75, 2.2);
+  blade.lineTo(0.95, 12.5);
+  blade.lineTo(0.7, 13.6);
+  blade.lineTo(-0.7, 13.6);
+  blade.lineTo(-0.95, 12.5);
+  blade.lineTo(-0.75, 2.2);
+  blade.closePath();
+  const bg = new THREE.ExtrudeGeometry(blade, { depth: 0.12, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.22, bevelSegments: 2 });
+  bg.translate(0, 0, -0.06);
+  g.add(new THREE.Mesh(bg, M.steel));
+  const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.28, 8.5, 0.32), new THREE.MeshStandardMaterial({ color: 0xa8acb4, metalness: 0.9, roughness: 0.45 }));
+  fuller.position.y = 8.4;
+  g.add(fuller);
+  const guard = new THREE.Mesh(new RoundedBoxGeometry(6, 0.8, 1.1, 2, 0.3), M.ironH);
+  guard.position.y = 14;
+  g.add(guard);
+  for (const x of [-3.1, 3.1]) {
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 8), M.brass);
+    knob.position.set(x, 14, 0);
+    g.add(knob);
+  }
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.55, 6.6, 14), new THREE.MeshStandardMaterial({ color: 0x3a2214, roughness: 0.8 }));
+  grip.position.y = 17.7;
+  g.add(grip);
+  const cord = new THREE.MeshStandardMaterial({ color: 0x5a3820, roughness: 0.75 });
+  const wrap = new THREE.TorusGeometry(0.56, 0.14, 6, 18);
+  for (let i = 0; i < 13; i++) {
+    const r = new THREE.Mesh(wrap, cord);
+    r.rotation.x = Math.PI / 2 + 0.18;
+    r.position.y = 14.9 + i * 0.47;
+    g.add(r);
+  }
+  const pommel = new THREE.Mesh(lathe([[0, 0], [0.6, 0.1], [1, 0.6], [0.9, 1.3], [0.4, 1.7], [0, 1.75]], 18), M.brass);
+  pommel.position.y = 20.9;
+  g.add(pommel);
+  // Sunk 2cm into the wood, leaning away from you.
+  g.position.y = -2;
+  const holder = new THREE.Group();
+  holder.add(g);
+  g.rotation.set(-0.32, 0.5, 0.12);
+  return shadowed(holder);
+}
+
+/** The opponent's high-backed oak chair, pulled up to the far side of the table. */
+export function chair(M: Mats): THREE.Group {
+  const g = new THREE.Group();
+  const wood = plankMaterial(M, 6, true, 0.15, 0.35);
+  const dark = wood.clone();
+  dark.color = new THREE.Color(0x8a6a50);
+  const seatY = -34;
+  const seat = new THREE.Mesh(new RoundedBoxGeometry(46, 4, 44, 3, 1), wood);
+  seat.position.y = seatY;
+  g.add(seat);
+  const legGeo = new RoundedBoxGeometry(4.2, 46, 4.2, 2, 0.8);
+  for (const [x, z] of [[-20, -18], [20, -18], [-20, 18], [20, 18]]) {
+    const leg = new THREE.Mesh(legGeo, dark);
+    leg.position.set(x, -80 + 23, z);
+    g.add(leg);
+  }
+  for (const z of [-18, 18]) {
+    const rung = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 40, 10), dark);
+    rung.rotation.z = Math.PI / 2;
+    rung.position.set(0, -66, z);
+    g.add(rung);
+  }
+  // Back posts with turned finials, a carved top rail and slats. The back is on the far side (-z).
+  for (const x of [-20.5, 20.5]) {
+    const post = new THREE.Mesh(new RoundedBoxGeometry(4.6, 82, 4.6, 2, 0.9), dark);
+    post.position.set(x, seatY + 39, -19.5);
+    post.rotation.x = -0.08;
+    const fin = new THREE.Mesh(lathe([[0, 0], [2.2, 0.4], [2.4, 1.6], [1.4, 2.6], [1.9, 4], [1.2, 5.6], [0, 6.2]], 16), dark);
+    fin.position.set(x, seatY + 80, -22.8);
+    g.add(post, fin);
+  }
+  const rail = new THREE.Mesh(new RoundedBoxGeometry(41, 8, 3.2, 3, 1.2), wood);
+  rail.position.set(0, seatY + 70, -22);
+  rail.rotation.x = -0.08;
+  const rail2 = new THREE.Mesh(new RoundedBoxGeometry(41, 4, 2.6, 2, 0.8), wood);
+  rail2.position.set(0, seatY + 22, -20.2);
+  rail2.rotation.x = -0.08;
+  g.add(rail, rail2);
+  for (const x of [-10, 0, 10]) {
+    const slat = new THREE.Mesh(new RoundedBoxGeometry(5, 44, 1.6, 2, 0.6), wood);
+    slat.position.set(x, seatY + 46, -21.2);
+    slat.rotation.x = -0.08;
+    g.add(slat);
+  }
+  // A worn red cushion on the seat.
+  const cushion = new THREE.Mesh(new RoundedBoxGeometry(40, 4, 38, 4, 1.8), new THREE.MeshStandardMaterial({ color: 0x5a1c1c, roughness: 0.95 }));
+  cushion.position.set(0, seatY + 3.6, 1);
+  cushion.scale.y = 0.9;
+  g.add(cushion);
+  return shadowed(g);
+}
+
+/** An oak barrel with iron hoops. */
+export function barrel(M: Mats): THREE.Group {
+  const g = new THREE.Group();
+  const prof: number[][] = [];
+  for (let i = 0; i <= 16; i++) {
+    const t = i / 16;
+    prof.push([18 + Math.sin(t * Math.PI) * 4, t * 60]);
+  }
+  const staves = plankMaterial(M, 2, true, 0.2, 0.5);
+  staves.map!.repeat.set(1, 3);
+  const body = new THREE.Mesh(lathe(prof, 22), staves);
+  g.add(body);
+  const lid = new THREE.Mesh(new THREE.CircleGeometry(18.6, 22), plankMaterial(M, 3, false, 0.1, 0.2));
+  lid.rotation.x = -Math.PI / 2;
+  lid.position.y = 58.6;
+  g.add(lid);
+  for (const t of [0.08, 0.3, 0.7, 0.92]) {
+    const r = 18 + Math.sin(t * Math.PI) * 4 + 0.3;
+    const hoop = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 2.6, 30, 1, true), M.ironH);
+    hoop.position.y = t * 60;
+    g.add(hoop);
+  }
+  return shadowed(g);
+}
+
+/** Glass inkwell with a brass collar and a goose quill. */
+export function inkwell(M: Mats): THREE.Group {
+  const g = new THREE.Group();
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x223040, roughness: 0.08, metalness: 0, clearcoat: 1, transparent: true, opacity: 0.85 });
+  const bottle = new THREE.Mesh(lathe([[0, 0], [2.8, 0], [3.2, 0.4], [3.3, 2.6], [2.6, 3.6], [1.3, 4.1], [1.25, 4.6], [0, 4.6]], 32), glass);
+  g.add(bottle);
+  const ink = new THREE.Mesh(new THREE.CylinderGeometry(2.9, 2.9, 2.2, 32), new THREE.MeshStandardMaterial({ color: 0x05070c, roughness: 0.1 }));
+  ink.position.y = 1.3;
+  g.add(ink);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.45, 1.5, 0.8, 24, 1, true), M.brass);
+  collar.position.y = 4.5;
+  g.add(collar);
+  // The quill: a shaft and a vane, leaning out of the neck.
+  const q = new THREE.Group();
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.16, 20, 8), new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.5 }));
+  shaft.position.y = 10;
+  q.add(shaft);
+  const vaneShape = new THREE.Shape();
+  vaneShape.moveTo(0, 6);
+  vaneShape.bezierCurveTo(1.8, 9, 1.9, 15, 0.2, 20.4);
+  vaneShape.lineTo(0, 20);
+  vaneShape.bezierCurveTo(-1.1, 15, -1.2, 10, 0, 6);
+  const cv = T.canvas(64, 256);
+  const cx = cv.getContext('2d')!;
+  cx.fillStyle = '#f4ecdc';
+  cx.fillRect(0, 0, 64, 256);
+  cx.strokeStyle = 'rgba(120,100,80,.35)';
+  for (let y = 0; y < 256; y += 3) {
+    cx.beginPath();
+    cx.moveTo(32, y);
+    cx.lineTo(0, y - 18);
+    cx.moveTo(32, y);
+    cx.lineTo(64, y - 18);
+    cx.stroke();
+  }
+  const vaneMat = new THREE.MeshStandardMaterial({ map: T.tex(cv), roughness: 0.85, side: THREE.DoubleSide });
+  const vg = new THREE.ShapeGeometry(vaneShape, 12);
+  // ShapeGeometry UVs are in shape units; squeeze them into 0..1.
+  const uv = vg.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 4 + 0.5, uv.getY(i) / 21);
+  const vane = new THREE.Mesh(vg, vaneMat);
+  vane.rotation.y = 0.4;
+  q.add(vane);
+  q.position.set(0.3, 1.5, 0);
+  q.rotation.set(0.1, 0, -0.42);
+  g.add(q);
+  shadowed(g);
+  bottle.castShadow = true;
   return g;
 }
 
@@ -371,10 +642,10 @@ function foam(g: THREE.Group, y: number, r: number, seed: number) {
   }
 }
 
-/** Pewter tankard with a foam head. */
+/** Hammered pewter tankard with a foam head and its hinged lid flipped open. */
 export function tankard(M: Mats): THREE.Group {
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(lathe([[0, 0], [4.3, 0], [4.55, 0.35], [4.3, 0.8], [4.0, 1.2], [3.85, 9.8], [4.15, 10.3], [4.2, 10.8], [3.95, 10.9], [3.7, 10.3], [3.7, 1.4], [0, 1.4]]), M.pewter));
+  g.add(new THREE.Mesh(lathe([[0, 0], [4.3, 0], [4.55, 0.35], [4.3, 0.8], [4.0, 1.2], [3.85, 9.8], [4.15, 10.3], [4.2, 10.8], [3.95, 10.9], [3.7, 10.3], [3.7, 1.4], [0, 1.4]]), M.pewterH));
   for (const y of [2.4, 8.6]) {
     const band = new THREE.Mesh(new THREE.TorusGeometry(3.93, 0.16, 8, 48), M.pewter);
     band.rotation.x = Math.PI / 2;
@@ -383,6 +654,25 @@ export function tankard(M: Mats): THREE.Group {
   }
   const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(3.9, 9, 0), new THREE.Vector3(6.8, 9.2, 0), new THREE.Vector3(7.6, 6.2, 0), new THREE.Vector3(6.4, 3.2, 0), new THREE.Vector3(3.9, 2.6, 0)]);
   g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 40, 0.62, 12), M.pewter));
+  // Hinge on top of the handle, and the lid swung back past upright.
+  const post = new THREE.Mesh(new RoundedBoxGeometry(1, 2.2, 1.4, 2, 0.3), M.pewter);
+  post.position.set(4.7, 10.2, 0);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2.2, 14), M.pewter);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(4.7, 11.3, 0);
+  g.add(post, barrel);
+  const pivot = new THREE.Group();
+  pivot.position.set(4.7, 11.3, 0);
+  const lid = new THREE.Mesh(lathe([[0, 0.95], [1.4, 0.92], [2.8, 0.7], [3.9, 0.35], [4.35, 0.12], [4.4, 0], [0, 0]], 40), M.pewterH);
+  lid.position.set(-4.5, -0.2, 0);
+  const knob = new THREE.Mesh(lathe([[0, 0], [0.5, 0.2], [0.55, 0.7], [0.3, 1.2], [0.42, 1.5], [0, 1.9]], 14), M.pewter);
+  knob.position.set(-4.5, 0.7, 0);
+  const thumb = new THREE.Mesh(lathe([[0, 0], [0.45, 0.3], [0.6, 1], [0.35, 1.6], [0, 1.8]], 14), M.pewter);
+  thumb.position.set(0.5, 0.2, 0);
+  thumb.rotation.z = -0.5;
+  pivot.add(lid, knob, thumb);
+  pivot.rotation.z = -1.6;
+  g.add(pivot);
   foam(g, 10.5, 3.95, 4);
   return shadowed(g);
 }
@@ -405,10 +695,10 @@ export function stein(M: Mats): THREE.Group {
 }
 
 // ------------------------------------------------------------------ table dressing
-/** Leather (or carved oak) deck box with a brass clasp. */
+/** Leather (or carved oak) deck box with a brass clasp; the leather one is stitched and strapped. */
 export function deckBox(M: Mats, kind: 'leather' | 'carved'): THREE.Group {
   const g = new THREE.Group();
-  let mat: THREE.Material;
+  let mat: THREE.MeshStandardMaterial;
   if (kind === 'leather') {
     const L = T.leather({ w: 256, h: 256, seed: 12, color: [92, 40, 22], creaseAmt: 0.6 });
     mat = new THREE.MeshStandardMaterial({ map: L.map, normalMap: L.normalMap, roughness: 0.7 });
@@ -427,11 +717,44 @@ export function deckBox(M: Mats, kind: 'leather' | 'carved'): THREE.Group {
     knot.position.set(0, 4.6, 2.62);
     knot.scale.z = 0.25;
     g.add(knot);
-  } else {
-    const emb = new THREE.Mesh(new THREE.TorusGeometry(1.6, 0.09, 8, 40), M.gold);
-    emb.position.set(0, 4.6, 2.62);
-    g.add(emb);
+    return shadowed(g);
   }
+  // Tooled emblem on the front, picked out with a gilt ring.
+  const tooled = new THREE.Mesh(new THREE.PlaneGeometry(5, 5), new THREE.MeshStandardMaterial({ map: mat.map, normalMap: T.tooledEmblem(), normalScale: new THREE.Vector2(1.6, 1.6), roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2 }));
+  tooled.position.set(0, 4.6, 2.605);
+  const emb = new THREE.Mesh(new THREE.TorusGeometry(1.87, 0.08, 8, 48), M.gold);
+  emb.position.set(0, 4.6, 2.64);
+  g.add(tooled, emb);
+  // A strap over the lid, buckled at the clasp.
+  const strapMat = new THREE.MeshStandardMaterial({ color: 0x3a180c, roughness: 0.65, normalMap: mat.normalMap });
+  const s1 = new THREE.Mesh(new RoundedBoxGeometry(1.5, 0.16, 5.5, 1, 0.06), strapMat);
+  s1.position.set(0, 10.24, 0);
+  const s2 = new THREE.Mesh(new RoundedBoxGeometry(1.5, 2.1, 0.16, 1, 0.06), strapMat);
+  s2.position.set(0, 9.3, 2.68);
+  const s3 = new THREE.Mesh(new RoundedBoxGeometry(1.5, 2.6, 0.16, 1, 0.06), strapMat);
+  s3.position.set(0, 9.0, -2.68);
+  g.add(s1, s2, s3);
+  // Saddle stitching along the edges and under the lid.
+  const thread = new THREE.MeshStandardMaterial({ color: 0xd9c49a, roughness: 0.8 });
+  const stitch = new THREE.CapsuleGeometry(0.05, 0.28, 2, 6);
+  const runs: [THREE.Vector3, THREE.Vector3][] = [];
+  const hx = 3.8 - 0.42;
+  const hz = 2.6 + 0.01;
+  for (const z of [hz, -hz]) {
+    runs.push([new THREE.Vector3(-hx, 0.45, z), new THREE.Vector3(-hx, 7.8, z)], [new THREE.Vector3(hx, 0.45, z), new THREE.Vector3(hx, 7.8, z)]);
+    runs.push([new THREE.Vector3(-hx, 7.82, z), new THREE.Vector3(hx, 7.82, z)]);
+  }
+  const placed: THREE.Matrix4[] = [];
+  const up = new THREE.Vector3(0, 1, 0);
+  for (const [a, b] of runs) {
+    const dir = b.clone().sub(a);
+    const n = Math.floor(dir.length() / 0.55);
+    const q = new THREE.Quaternion().setFromUnitVectors(up, dir.clone().normalize());
+    for (let i = 0; i <= n; i++) placed.push(new THREE.Matrix4().compose(a.clone().addScaledVector(dir, i / n), q, new THREE.Vector3(1, 1, 1)));
+  }
+  const im = new THREE.InstancedMesh(stitch, thread, placed.length);
+  placed.forEach((m, i) => im.setMatrixAt(i, m));
+  g.add(im);
   return shadowed(g);
 }
 
@@ -470,14 +793,31 @@ export function coinPouch(M: Mats): THREE.Group {
   tie.rotation.x = Math.PI / 2;
   tie.position.y = 7.1;
   g.add(bag, neck, ruff, tie);
+  // Drawstrings hanging from the knot, with knotted ends.
+  const cordMat = new THREE.MeshStandardMaterial({ color: 0xb8925e, roughness: 0.85 });
+  for (const [dx, dz, len] of [[1, 0.4, 1], [0.6, -0.9, 0.8]]) {
+    const pts = [new THREE.Vector3(1.3 * dx, 7.1, 1.3 * dz), new THREE.Vector3(2.6 * dx, 6.6, 2.4 * dz), new THREE.Vector3(3.6 * dx, 4.6 * len + 1, 3.6 * dz), new THREE.Vector3(4.4 * dx, 2.2 * len + 1.2, 4.6 * dz)];
+    const curve = new THREE.CatmullRomCurve3(pts);
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.13, 6), cordMat));
+    const knot = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), cordMat);
+    knot.position.copy(pts[3]);
+    g.add(knot);
+  }
+  // Spilled coins, struck with a crown, and a short stack.
   const coinGeo = new THREE.CylinderGeometry(1.05, 1.05, 0.18, 28);
   const R = rng(2);
-  for (let i = 0; i < 9; i++) {
-    const c = new THREE.Mesh(coinGeo, M.gold);
+  for (let i = 0; i < 11; i++) {
+    const c = new THREE.Mesh(coinGeo, M.coin);
     const a = -0.6 + R() * 1.6;
     const r = 5 + R() * 3.5;
     c.position.set(Math.cos(a) * r, 0.1 + (i % 3) * 0.19, Math.sin(a) * r);
     c.rotation.set((R() - 0.5) * 0.25, R() * 3, (R() - 0.5) * 0.25);
+    g.add(c);
+  }
+  for (let i = 0; i < 6; i++) {
+    const c = new THREE.Mesh(coinGeo, M.coin);
+    c.position.set(-6 + (R() - 0.5) * 0.25, 0.1 + i * 0.19, 3.5 + (R() - 0.5) * 0.25);
+    c.rotation.y = R() * 6;
     g.add(c);
   }
   return shadowed(g);

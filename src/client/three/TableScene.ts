@@ -1,7 +1,6 @@
 // The 3D tavern behind the board. The board itself stays real HTML (so clicks, drag & drop and arrows keep
 // working); it is placed on the 3D table with CSS3DRenderer, which shares the WebGL camera.
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -66,7 +65,7 @@ export class TableScene {
   private quality: Quality;
   private calm = false;
   private M!: Mo.Mats;
-  private props: Record<string, THREE.Group> = {};
+  private props: Record<string, THREE.Object3D> = {};
   private flickers: Mo.Flicker[] = [];
   private propFlicker: Record<string, Mo.Flicker> = {};
   private propSet: PropSet = 'candle';
@@ -120,8 +119,8 @@ export class TableScene {
     s.background = new THREE.Color(0x070402);
     s.fog = new THREE.Fog(0x0d0805, 260, 620);
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    s.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    s.environmentIntensity = 0.22;
+    s.environment = pmrem.fromScene(Mo.tavernEnvironment(), 0.03).texture;
+    s.environmentIntensity = 0.24;
     pmrem.dispose();
 
     s.add(new THREE.HemisphereLight(0x6a5240, 0x0c0704, 0.32));
@@ -147,6 +146,18 @@ export class TableScene {
     this.flickers.push(...room.fires);
     await nextFrame();
     s.add(Mo.tavernTable(this.M, { W: TABLE_W, D: TABLE_D, rows: 8 }));
+    s.add(Mo.tableIron(this.M, TABLE_W, TABLE_D));
+    // The opponent's chair across the table, and a couple of barrels in the gloom.
+    const chair = Mo.chair(this.M);
+    chair.position.set(4, 0, -TABLE_D / 2 - 30);
+    chair.rotation.y = 0.07;
+    s.add(chair);
+    for (const [x, z, ry] of [[-158, -120, 0.4], [-196, -70, 1.3], [172, -128, 2]]) {
+      const b = Mo.barrel(this.M);
+      b.position.set(x, -80, z);
+      b.rotation.y = ry;
+      s.add(b);
+    }
     await nextFrame();
 
     const candle = Mo.candle(this.M);
@@ -165,6 +176,10 @@ export class TableScene {
       scroll: Mo.scroll(),
       trayRed: Mo.diceTray(this.M, [96, 24, 30], 46, 15),
       trayGreen: Mo.diceTray(this.M, [26, 70, 44], 46, 15),
+      dagger: Mo.dagger(this.M),
+      tally: Mo.carvedMark('tally', 13),
+      rune: Mo.carvedMark('rune', 11),
+      inkwell: Mo.inkwell(this.M),
     };
     const P = this.props;
     const hw = TABLE_W / 2;
@@ -173,6 +188,8 @@ export class TableScene {
     P.stein.rotation.y = -0.6;
     for (const k of ['boxLeather', 'boxCarved']) P[k].rotation.y = 0.35;
     P.pouch.rotation.y = -0.4;
+    P.tally.rotation.z = 0.25;
+    P.inkwell.rotation.y = 0.6;
     P.scroll.rotation.y = 0.12;
     P.scroll.scale.setScalar(0.8);
     P.crown.visible = false;
@@ -253,6 +270,7 @@ export class TableScene {
     P.boxCarved.visible = !a;
     P.hourglass.visible = !a;
     P.scroll.visible = !a;
+    P.inkwell.visible = !a;
     P.trayGreen.visible = !a;
     for (const p of Object.values(P)) if (p.userData.offscreen) p.visible = false;
     this.propFlicker.candle.light.visible = a;
@@ -474,6 +492,12 @@ export class TableScene {
     put(['scroll'], l + 0.17, 0.15);
     put(['boxLeather', 'boxCarved'], l + 0.12, 0.935);
     put(['pouch', 'hourglass'], 0.745, 0.935);
+    put(['dagger'], 0.7, 0.19);
+    put(['tally'], 0.4, 0.165);
+    put(['rune'], 0.6, 0.175);
+    put(['inkwell'], l + 0.27, 0.13);
+    if (P.tally) P.tally.position.y = 0.32;
+    if (P.rune) P.rune.position.y = 0.32;
     this.applyProps();
   }
 
