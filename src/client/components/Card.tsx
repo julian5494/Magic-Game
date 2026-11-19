@@ -3,6 +3,34 @@ import type { CardView } from '../../engine/view';
 
 export const IMAGES_KEY = 'commander-arena-images';
 
+const FOIL_NAMES: Record<string, string> = {
+  foil: 'Foil',
+  etched: 'Etched foil',
+  galaxy: 'Galaxy foil',
+  surge: 'Surge foil',
+  halo: 'Halo foil',
+  confetti: 'Confetti foil',
+  textured: 'Textured foil',
+  oilslick: 'Oil slick foil',
+  gilded: 'Gilded foil',
+  rainbow: 'Double rainbow foil',
+  fracture: 'Fracture foil',
+  ripple: 'Ripple foil',
+  raised: 'Raised foil',
+  neon: 'Neon ink',
+};
+
+/** The shimmer over a foil card (its look depends on the kind of foil). */
+export function Foil({ kind }: { kind?: string }) {
+  if (!kind || !imagesEnabled()) return null;
+  return <div className={`foil foil-${kind}`} aria-hidden />;
+}
+
+/** "Galaxy foil · Showcase · Borderless" */
+export function lookLabel(card: CardView): string {
+  return [card.foil ? FOIL_NAMES[card.foil] ?? 'Foil' : '', ...(card.treatments ?? [])].filter(Boolean).join(' · ');
+}
+
 export function imagesEnabled(): boolean {
   try {
     return localStorage.getItem(IMAGES_KEY) !== 'off';
@@ -105,6 +133,7 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
           </div>
         </div>
       )}
+      {useImage && <Foil kind={card.foil} />}
       {card.power !== undefined && card.zone === 'battlefield' && (
         <div className={`pt ${buffed ? 'buff' : ''} ${debuffed ? 'debuff' : ''} ${card.damage ? 'damaged' : ''}`}>
           {card.power}/{card.toughness! - card.damage}
@@ -145,8 +174,10 @@ export function CardPreview({ card }: { card: CardView }) {
   const changedPT =
     card.power !== undefined && (card.power !== card.basePower || card.toughness !== card.baseToughness || card.damage > 0);
   const counters = Object.entries(card.counters).filter(([, n]) => n > 0);
+  const label = lookLabel(card);
   const extras = (
     <>
+      {label && <div className="preview-look">✦ {label}</div>}
       {changedPT && (
         <div className="preview-pt">
           {card.power}/{card.toughness}
@@ -175,6 +206,7 @@ export function CardPreview({ card }: { card: CardView }) {
         <div className={`preview-img ${loaded ? 'loaded' : ''}`}>
           <img src={card.image ?? imageUrl(card.name)} alt={card.name} onLoad={() => setLoaded(true)} onError={() => setImgFailed(true)} />
           {!loaded && <span className="preview-img-name">{card.name}</span>}
+          <Foil kind={card.foil} />
         </div>
       ) : (
         <div className="preview-text">

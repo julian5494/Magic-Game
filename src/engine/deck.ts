@@ -1,4 +1,5 @@
 import type { CardDef } from './cardtypes';
+import type { CardLook } from './types';
 import { findDef } from './registry';
 import { colorIdentity } from './state';
 
@@ -8,6 +9,8 @@ export interface DeckList {
   cards: string[];
   /** Preferred card image per card name (the printing chosen in the imported list). */
   art?: Record<string, string>;
+  /** Every copy's look, per card name, in list order (different arts, foils, treatments). */
+  printings?: Record<string, CardLook[]>;
 }
 
 export interface Coverage {
@@ -49,7 +52,7 @@ export function commanderCandidates(names: string[]): string[] {
 }
 
 /** Validate a resolved deck. All names must already be registered. */
-export function checkDeck(commanders: string[], cards: string[], opts: { art?: Record<string, string> } = {}): DeckCheck {
+export function checkDeck(commanders: string[], cards: string[], opts: { art?: Record<string, string>; printings?: Record<string, CardLook[]> } = {}): DeckCheck {
   const errors: string[] = [];
   const warnings: string[] = [];
   const cmdDefs: CardDef[] = [];
@@ -116,7 +119,7 @@ export function checkDeck(commanders: string[], cards: string[], opts: { art?: R
     ok: errors.length === 0,
     errors,
     warnings,
-    deck: cmdDefs.length ? { commanders: cmdDefs.map((d) => d.name), cards: resolved, art: opts.art } : undefined,
+    deck: cmdDefs.length ? { commanders: cmdDefs.map((d) => d.name), cards: resolved, art: opts.art, printings: opts.printings } : undefined,
     coverage,
   };
 }

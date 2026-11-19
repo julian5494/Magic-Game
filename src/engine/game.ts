@@ -15,7 +15,7 @@ import {
   log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot,
 } from './state';
 import type {
-  Action, CardId, CardInstance, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot, StackItem,
+  Action, CardId, CardInstance, CardLook, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot, StackItem,
   Target, TargetSpecView,
 } from './types';
 import { COLORS } from './types';
@@ -933,6 +933,8 @@ export interface PlayerConfig {
   isBot?: boolean;
   /** Preferred image per card name (chosen printing). */
   art?: Record<string, string>;
+  /** Each copy's look per card name (art, foil, treatments), handed out in list order. */
+  printings?: Record<string, CardLook[]>;
 }
 
 export function createGame(players: PlayerConfig[], seed = Date.now() % 2147483647): GameState {
@@ -990,16 +992,25 @@ export function createGame(players: PlayerConfig[], seed = Date.now() % 21474836
   }
   for (const cfg of order) {
     const p = getPlayer(state, cfg.id);
+    const used: Record<string, number> = {};
+    const dress = (c: CardInstance, name: string) => {
+      const list = cfg.printings?.[name];
+      if (list?.length) {
+        const look = list[(used[name] = (used[name] ?? -1) + 1) % list.length];
+        c.look = look;
+        c.art = look.image ?? cfg.art?.[name];
+      } else c.art = cfg.art?.[name];
+    };
     for (const name of Array.isArray(cfg.commander) ? cfg.commander : [cfg.commander]) {
       const cmd = makeCard(state, name, p.id, 'command');
       cmd.commander = true;
-      cmd.art = cfg.art?.[name];
+      dress(cmd, name);
       p.command.push(cmd.id);
       p.commanders.push(cmd.id);
     }
     for (const name of cfg.cards) {
       const c = makeCard(state, name, p.id, 'library');
-      c.art = cfg.art?.[name];
+      dress(c, name);
       p.library.push(c.id);
     }
     shuffle(state, p.library);

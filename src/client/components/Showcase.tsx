@@ -6,10 +6,10 @@ import { GameBoard } from './GameBoard';
 
 /**
  * A static table for checking the board visuals without playing a game:
- * open /?showcase=effects or /?showcase=combat.
+ * open /?showcase=effects, /?showcase=combat, /?showcase=blocks or /?showcase=foils.
  */
 export function Showcase({ scene }: { scene: string }) {
-  const [view] = useState(() => (scene === 'combat' ? combatScene() : scene === 'blocks' ? combatScene(true) : effectsScene()));
+  const [view] = useState(() => (scene === 'combat' ? combatScene() : scene === 'blocks' ? combatScene(true) : scene === 'foils' ? foilScene() : effectsScene()));
   const net: NetState = {
     connected: true,
     playerId: 'me',
@@ -196,4 +196,34 @@ function combatScene(declaring = false): GameView {
       dealtFirstStrike: [],
     },
   });
+}
+
+/** Every foil finish and a few frame treatments, laid out on one table. */
+function foilScene(): GameView {
+  const cmd = card('Atraxa, Praetors\' Voice', 'me', ['Legendary', 'Creature'], { zone: 'command', commander: true, cost: '{G}{W}{U}{B}', colors: ['G', 'W', 'U', 'B'], pt: [4, 4], foil: 'surge', treatments: ['Borderless'] });
+  const looks: [string, string[], Parameters<typeof card>[3]][] = [
+    ['Serra Angel', ['Creature'], { foil: 'foil', pt: [4, 4], kw: ['Flying'] }],
+    ['Llanowar Elves', ['Creature'], { foil: 'etched', pt: [1, 1] }],
+    ['Sakura-Tribe Elder', ['Creature'], { foil: 'galaxy', pt: [1, 1] }],
+    ['Birds of Paradise', ['Creature'], { foil: 'halo', pt: [0, 1], kw: ['Flying'] }],
+    ['Eternal Witness', ['Creature'], { foil: 'confetti', pt: [2, 1] }],
+    ['Grizzly Bears', ['Creature'], { foil: 'textured', pt: [2, 2] }],
+    ['Thragtusk', ['Creature'], { foil: 'oilslick', pt: [5, 3] }],
+    ['Sol Ring', ['Artifact'], { foil: 'gilded' }],
+    ['Arcane Signet', ['Artifact'], { foil: 'rainbow' }],
+    ['Lightning Greaves', ['Artifact'], { foil: 'fracture' }],
+    ['Swiftfoot Boots', ['Artifact'], { foil: 'ripple' }],
+    ['Glorious Anthem', ['Enchantment'], { foil: 'raised' }],
+    ['Rhystic Study', ['Enchantment'], { foil: 'neon' }],
+  ];
+  const mine = [...looks.map(([nm, types, o]) => card(nm, 'me', types, o)), ...lands('me', 'Forest', 4), ...lands('me', 'Plains', 3, 1), cmd];
+  const opp = [card('Craw Wurm', 'p2', ['Creature'], { pt: [6, 4], foil: 'foil', treatments: ['Retro frame'] }), ...lands('p2', 'Island', 5)];
+  const hand = [
+    card('Swords to Plowshares', 'me', ['Card'], { zone: 'hand', foil: 'foil', treatments: ['Showcase'] }),
+    card('Cultivate', 'me', ['Card'], { zone: 'hand', foil: 'etched' }),
+    card('Path to Exile', 'me', ['Card'], { zone: 'hand', treatments: ['Extended art'] }),
+    card('Forest', 'me', ['Card'], { zone: 'hand', foil: 'galaxy', treatments: ['Full art'] }),
+  ];
+  const players = [player('me', 'You', 40, [cmd.id]), player('p2', 'Morgan', 40, [])];
+  return base([...mine, ...opp, ...hand], players, {});
 }

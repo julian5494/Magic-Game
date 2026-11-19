@@ -5,6 +5,8 @@ export interface DeckEntry {
   set?: string;
   cn?: string;
   commander?: boolean;
+  /** This copy is foil or etched foil (from the source list). */
+  finish?: 'foil' | 'etched';
 }
 
 export interface RawDeck {
@@ -48,6 +50,7 @@ async function importArchidekt(id: string): Promise<RawDeck> {
       set: c.card?.edition?.editioncode,
       cn: c.card?.collectorNumber,
       commander,
+      finish: /etched/i.test(c.modifier ?? '') ? 'etched' : /foil/i.test(c.modifier ?? '') ? 'foil' : undefined,
     });
   }
   return { name: d.name, entries, commandersMarked: entries.some((e) => e.commander) };
@@ -69,7 +72,8 @@ async function importMoxfield(id: string): Promise<RawDeck> {
   const entries: DeckEntry[] = [];
   const board = (b: any, commander: boolean) => {
     for (const v of Object.values<any>(b?.cards ?? {})) {
-      entries.push({ name: v.card?.name, count: v.quantity ?? 1, set: v.card?.set, cn: v.card?.cn, commander });
+      const finish = /etched/i.test(v.finish ?? '') ? 'etched' : v.isFoil || /^foil$/i.test(v.finish ?? '') ? 'foil' : undefined;
+      entries.push({ name: v.card?.name, count: v.quantity ?? 1, set: v.card?.set, cn: v.card?.cn, commander, finish });
     }
   };
   board(d.boards?.commanders, true);
@@ -121,6 +125,9 @@ export function parseDeckText(text: string): RawDeck {
       commander = true;
       marked = true;
     }
+    // Moxfield/Archidekt exports mark foils "*F*" and etched foils "*E*".
+    const finish: DeckEntry['finish'] = /\s\*E\*/i.test(rest) ? 'etched' : /\s\*F\*|\s\(foil\)/i.test(rest) ? 'foil' : undefined;
+    rest = rest.replace(/\s\(foil\)/i, '');
     rest = rest.replace(/\*cmdr\*|\[commander[^\]]*\]/gi, '').replace(/\s\*[A-Z]+\*/g, '').replace(/\s\^[^^]*\^/g, '').replace(/\s#\S+/g, '').trim();
     let set: string | undefined;
     let cn: string | undefined;
@@ -132,7 +139,7 @@ export function parseDeckText(text: string): RawDeck {
     }
     const name = rest.replace(/\s+/g, ' ').trim();
     if (!name) continue;
-    const e: DeckEntry = { name, count, set, cn, commander };
+    const e: DeckEntry = { name, count, set, cn, commander, finish };
     entries.push(e);
     blocks[blocks.length - 1].push(e);
   }

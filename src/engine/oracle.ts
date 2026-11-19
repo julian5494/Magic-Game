@@ -34,6 +34,14 @@ export interface ScryCard extends ScryFace {
   legalities?: Record<string, string>;
   set?: string;
   collector_number?: string;
+  /** How this printing looks (only for specific printings). */
+  finishes?: string[];
+  promo_types?: string[];
+  frame_effects?: string[];
+  border_color?: string;
+  full_art?: boolean;
+  frame?: string;
+  textless?: boolean;
 }
 
 // ---------- Small helpers ----------

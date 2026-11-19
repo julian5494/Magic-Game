@@ -3,6 +3,19 @@
 
 export type PlayerId = string;
 export type AutoPassMode = 'smart' | 'stack' | 'none';
+
+/** Foil finishes Magic has printed (shown as a shimmer over the card). */
+export type FoilKind =
+  | 'foil' | 'etched' | 'galaxy' | 'surge' | 'halo' | 'confetti' | 'textured' | 'oilslick'
+  | 'gilded' | 'rainbow' | 'fracture' | 'ripple' | 'raised' | 'neon';
+
+/** How one physical copy looks: its printing's image, foil finish and frame treatments. */
+export interface CardLook {
+  image?: string;
+  foil?: FoilKind;
+  /** e.g. Showcase, Borderless, Extended art, Full art, Retro frame, Serialized. */
+  treatments?: string[];
+}
 export type CardId = string;
 
 export type Color = 'W' | 'U' | 'B' | 'R' | 'G';
@@ -63,6 +76,8 @@ export interface CardInstance {
   x?: number;
   /** Image of the chosen printing. */
   art?: string;
+  /** Foil finish and frame treatments of this physical copy (from the imported list). */
+  look?: CardLook;
   /** Front-face definition while this card is showing its back face or copying something. */
   frontDef?: string;
   /** May be played from exile by this player until the end of this turn number (impulse draw). */

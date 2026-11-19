@@ -156,7 +156,7 @@ export class Room {
     const missing = this.seats.find((s) => !s.deck);
     if (missing) throw new Error(`${missing.name} hasn't chosen a deck yet`);
     this.state = createGame(
-      this.seats.map((s) => ({ id: s.playerId, name: s.name, commander: s.deck!.commanders, cards: s.deck!.cards, art: s.deck!.art, isBot: s.isBot })),
+      this.seats.map((s) => ({ id: s.playerId, name: s.name, commander: s.deck!.commanders, cards: s.deck!.cards, art: s.deck!.art, printings: s.deck!.printings, isBot: s.isBot })),
       Math.floor(Math.random() * 2147483647),
     );
     this.broadcastGame();

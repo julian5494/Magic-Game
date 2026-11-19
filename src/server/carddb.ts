@@ -60,6 +60,13 @@ function slim(c: any): ScryCard {
     legalities: c.legalities ? { commander: c.legalities.commander } : undefined,
     set: c.set,
     collector_number: c.collector_number,
+    finishes: c.finishes,
+    promo_types: c.promo_types,
+    frame_effects: c.frame_effects,
+    border_color: c.border_color,
+    full_art: c.full_art,
+    frame: c.frame,
+    textless: c.textless,
   };
 }
 
@@ -99,6 +106,19 @@ export interface LoadedCard {
   def: CardDef;
   /** Image for the requested printing (falls back to the card's default image). */
   image?: string;
+  /** Finish and frame details of the requested printing. */
+  printing?: PrintingInfo;
+}
+
+/** The Scryfall fields that describe how a printing looks. */
+export interface PrintingInfo {
+  finishes?: string[];
+  promo_types?: string[];
+  frame_effects?: string[];
+  border_color?: string;
+  full_art?: boolean;
+  frame?: string;
+  textless?: boolean;
 }
 
 /**
@@ -118,6 +138,8 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
     const p = keyOf(r) ? cache.get(keyOf(r)!) : undefined;
     return p && nameMatches(r, p) ? p : undefined;
   };
+  // Printings cached before we kept finish/treatment details are fetched again once.
+  const stale = (r: CardRequest) => !!keyOf(r) && !!cache.get(keyOf(r)!) && (cache.get(keyOf(r)!) as PrintingInfo).finishes === undefined;
 
   const seen = new Set<string>();
   for (const r of requests) {
@@ -126,7 +148,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
     seen.add(k);
     const printing = printingOf(r);
     const byName = cache.get(normalizeName(r.name)) ?? bulkCard(r.name);
-    if (printing || (byName && (!keyOf(r) || cache.has(keyOf(r)!)))) continue;
+    if (!stale(r) && (printing || (byName && (!keyOf(r) || cache.has(keyOf(r)!))))) continue;
     pending.push(r);
   }
 
@@ -185,7 +207,8 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
     }
     const def = ensureDef(card);
     const image = imageOf(printing ?? card);
-    found.set(r.name, { def, image });
+    found.set(`${r.name}|${keyOf(r) ?? ''}`, { def, image, printing: printing as PrintingInfo | undefined });
+    if (!found.has(r.name)) found.set(r.name, { def, image, printing: printing as PrintingInfo | undefined });
   }
   return { found, notFound };
 }

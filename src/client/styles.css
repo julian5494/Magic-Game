@@ -776,3 +776,66 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .handcard.nope .card { animation: nope .4s ease-in-out; }
 @keyframes nope { 20% { transform: translateX(-7px) rotate(-2deg); } 40% { transform: translateX(6px) rotate(2deg); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
 .nope-hint { left: 50%; bottom: 128px; transform: translateX(-50%); z-index: 47; max-width: 440px; padding: 7px 14px; border-radius: 10px; font: 600 12.5px Inter, sans-serif; color: #ffe6b8; background: #2a1a10ee; box-shadow: 0 0 0 1px #000, 0 0 0 2px #ef5d6b88, 0 10px 24px #000a; text-align: center; animation: popIn .15s ease-out; pointer-events: none; }
+
+/* =====================================================================
+   Foils. Each card face isolates its blending, so foils never flatten the 3D table.
+   The rainbow layers are static; only a glare band moves (cheap to animate).
+   ===================================================================== */
+.card { isolation: isolate; }
+.foil { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 2; overflow: hidden; mix-blend-mode: color-dodge; opacity: .5;
+  background: linear-gradient(115deg, #ff4f9a55 0%, #ffd36655 17%, #6dffb055 34%, #5ed6ff55 51%, #b07bff55 68%, #ff4f9a55 85%, #ffd36655 100%); }
+.foil::before { content: ''; position: absolute; inset: 0; mix-blend-mode: soft-light; background: linear-gradient(200deg, #ffffff40, transparent 35%, transparent 65%, #ffffff30); }
+.foil::after { content: ''; position: absolute; top: -50%; bottom: -50%; left: -60%; width: 60%; transform: translateX(-40%) rotate(14deg);
+  background: linear-gradient(90deg, transparent, #ffffff55 45%, #ffffffb0 50%, #ffffff55 55%, transparent); animation: foilGlare 5.5s ease-in-out infinite; }
+@keyframes foilGlare { 0% { transform: translateX(-40%) rotate(14deg); } 45%, 100% { transform: translateX(320%) rotate(14deg); } }
+.perm:nth-child(3n) .foil::after, .handcard:nth-child(3n) .foil::after { animation-delay: -1.8s; }
+.perm:nth-child(3n+1) .foil::after, .handcard:nth-child(3n+1) .foil::after { animation-delay: -3.6s; }
+
+/* Etched: a cool metallic sheen with fine etched lines, no rainbow. */
+.foil-etched { mix-blend-mode: soft-light; opacity: .8;
+  background: repeating-linear-gradient(48deg, #ffffff22 0 1px, transparent 1px 3px), linear-gradient(135deg, #8c8c96 0%, #fff6dc 28%, #a8a8b4 52%, #ffffff 74%, #9a9aa6 100%); }
+/* Galaxy: a dusting of stars over the rainbow. */
+.foil-galaxy { opacity: .6;
+  background:
+    radial-gradient(1.2px 1.2px at 12% 18%, #fff 50%, transparent), radial-gradient(1px 1px at 33% 72%, #fff 50%, transparent), radial-gradient(1.5px 1.5px at 58% 34%, #fff 50%, transparent),
+    radial-gradient(1px 1px at 81% 61%, #fff 50%, transparent), radial-gradient(1.3px 1.3px at 70% 88%, #fff 50%, transparent), radial-gradient(1px 1px at 22% 50%, #fff 50%, transparent),
+    radial-gradient(1.4px 1.4px at 90% 12%, #fff 50%, transparent), radial-gradient(1px 1px at 45% 8%, #fff 50%, transparent),
+    linear-gradient(115deg, #5b4bff55, #ff5bd655 40%, #4bd6ff55 70%, #8b5bff55); background-size: 60px 60px, 70px 70px, 90px 90px, 50px 50px, 80px 80px, 65px 65px, 75px 75px, 55px 55px, 100% 100%; }
+/* Surge: rainbow waves across the whole card. */
+.foil-surge { opacity: .55;
+  background: repeating-linear-gradient(125deg, #ff4f9a44 0 14px, #ffd36644 14px 28px, #6dffb044 28px 42px, #5ed6ff44 42px 56px, #b07bff44 56px 70px); }
+/* Halo: rainbow rings from the middle of the art. */
+.foil-halo { opacity: .55; background: repeating-radial-gradient(circle at 50% 35%, #ff4f9a44 0 10px, #ffd36644 10px 20px, #6dffb044 20px 30px, #5ed6ff44 30px 40px, #b07bff44 40px 50px); }
+/* Confetti: little coloured flecks. */
+.foil-confetti { opacity: .6;
+  background:
+    radial-gradient(2px 2px at 20% 30%, #ff4f9a, transparent), radial-gradient(2px 2px at 60% 20%, #ffd366, transparent), radial-gradient(2px 2px at 80% 70%, #6dffb0, transparent),
+    radial-gradient(2px 2px at 35% 80%, #5ed6ff, transparent), radial-gradient(2px 2px at 50% 55%, #b07bff, transparent), linear-gradient(115deg, #ffffff22, #ffd36633, #5ed6ff33);
+  background-size: 40px 40px, 46px 46px, 52px 52px, 44px 44px, 38px 38px, 100% 100%; }
+/* Textured: a raised, crosshatched surface under the rainbow. */
+.foil-textured { opacity: .65;
+  background: repeating-linear-gradient(45deg, #ffffff2a 0 1px, transparent 1px 4px), repeating-linear-gradient(-45deg, #0000001a 0 1px, transparent 1px 4px),
+    linear-gradient(115deg, #ff4f9a55, #ffd36655 25%, #6dffb055 50%, #5ed6ff55 75%, #b07bff55); }
+/* Oil slick: dark, inky iridescence. */
+.foil-oilslick { mix-blend-mode: hard-light; opacity: .45; background: linear-gradient(135deg, #1a0830 0%, #0d3a32 30%, #3a1040 55%, #0a2a3a 80%, #2a0a26 100%); }
+.foil-oilslick::before { mix-blend-mode: color-dodge; background: linear-gradient(115deg, transparent 20%, #8b5bff55 40%, #4bffc855 55%, transparent 75%); }
+/* Gilded: warm gold leaf. */
+.foil-gilded { mix-blend-mode: overlay; opacity: .7; background: linear-gradient(135deg, #8a5a12 0%, #ffe39a 25%, #b8862f 50%, #fff1c4 70%, #8a5a12 100%); }
+/* Double rainbow: two bright bands. */
+.foil-rainbow { opacity: .6; background: linear-gradient(115deg, transparent 10%, #ff4f9a66 20%, #ffd36666 26%, #6dffb066 32%, #5ed6ff66 38%, transparent 48%, #ff4f9a66 58%, #ffd36666 64%, #6dffb066 70%, #5ed6ff66 76%, transparent 86%); }
+/* Fracture: shattered-glass facets. */
+.foil-fracture { opacity: .6;
+  background: repeating-linear-gradient(62deg, transparent 0 18px, #ffffff40 18px 19px), repeating-linear-gradient(-28deg, transparent 0 23px, #ffffff38 23px 24px),
+    repeating-linear-gradient(8deg, transparent 0 31px, #ffffff30 31px 32px), linear-gradient(115deg, #ff4f9a55, #ffd36655 30%, #6dffb055 60%, #5ed6ff55); }
+/* Ripple: rings spreading across the card. */
+.foil-ripple { opacity: .55; background: repeating-radial-gradient(circle at 30% 70%, transparent 0 8px, #ffffff40 8px 10px), linear-gradient(115deg, #ff4f9a44, #6dffb044, #5ed6ff44, #b07bff44); }
+/* Raised: like foil, with a stronger glare. */
+.foil-raised { opacity: .6; }
+.foil-raised::after { background: linear-gradient(90deg, transparent, #ffffff80 45%, #ffffffe0 50%, #ffffff80 55%, transparent); }
+/* Neon ink: vivid glowing colour. */
+.foil-neon { mix-blend-mode: screen; opacity: .35; background: linear-gradient(135deg, #ff2fb0, #2fffd0 50%, #ffe02f); }
+
+.calm .foil::after { animation: none; display: none; }
+@media (prefers-reduced-motion: reduce) { .foil::after { animation: none; display: none; } }
+.mini .foil::after { display: none; }
+.preview-look { font: 700 12px Cinzel, Georgia, serif; letter-spacing: .5px; color: #ffd98a; text-shadow: 0 0 8px #ffb34766; }

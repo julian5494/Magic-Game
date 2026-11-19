@@ -4,7 +4,7 @@ import {
   attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, typeLine,
 } from './state';
 import type {
-  CardId, CardInstance, Color, Decision, GameState, Keyword, LogEntry, ManaSym, PlayableAction, PlayerId, Step, Target,
+  CardId, CardInstance, Color, FoilKind, Decision, GameState, Keyword, LogEntry, ManaSym, PlayableAction, PlayerId, Step, Target,
 } from './types';
 
 export interface CardView {
@@ -39,6 +39,10 @@ export interface CardView {
   cannotCast?: boolean;
   /** Ward cost, e.g. "{2}". */
   ward?: string;
+  /** Foil finish of this copy, if it's foil. */
+  foil?: FoilKind;
+  /** Frame treatments of this printing (Showcase, Borderless, ...). */
+  treatments?: string[];
 }
 
 /** Mana a player could make right now, grouped by what each source can produce. */
@@ -139,6 +143,8 @@ export function cardView(state: GameState, c: CardInstance): CardView {
     unsupported: def.unsupported?.length ? def.unsupported : undefined,
     cannotCast: def.cannotCast || undefined,
     ward: def.ward,
+    foil: c.look?.foil,
+    treatments: c.look?.treatments?.length ? c.look.treatments : undefined,
   };
 }
 

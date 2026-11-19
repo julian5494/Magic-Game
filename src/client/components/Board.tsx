@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
 import type { CardId, Keyword, PlayerId } from '../../engine/types';
 import type { CardView, GameView } from '../../engine/view';
-import { imagesEnabled, imageUrl, ManaText } from './Card';
+import { Foil, imagesEnabled, imageUrl, ManaText } from './Card';
 
 type Extra = HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
 
@@ -230,6 +230,7 @@ export function Permanent({
             {showImg && <img src={src} alt="" style={{ display: 'none' }} onError={() => setImgFailed(true)} />}
             {!showImg && <TextFace card={c} mode={mode} />}
             {mode === 'tile' && showImg && <div className="banner">{c.name}</div>}
+            {showImg && <Foil kind={c.foil} />}
             {rune && <RuneCircle kind={rune} />}
             {kw('Indestructible') && <div className="shine" />}
           </div>
