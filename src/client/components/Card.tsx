@@ -1,5 +1,6 @@
-import { useState, type HTMLAttributes, type ReactNode } from 'react';
+import { useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import type { CardView } from '../../engine/view';
+import { ensureFoilTextures, FOIL_LAYERS, foilSeed, NEON } from '../foil';
 
 export const IMAGES_KEY = 'commander-arena-images';
 
@@ -20,10 +21,29 @@ const FOIL_NAMES: Record<string, string> = {
   neon: 'Neon ink',
 };
 
-/** The shimmer over a foil card (its look depends on the kind of foil). */
-export function Foil({ kind }: { kind?: string }) {
+/**
+ * The finish over a foil card. Each kind is a few blended groups of layers (see FOIL_LAYERS):
+ * moving light (the rainbow, the sheen) over the pattern printed into that finish (stars, waves, shards...).
+ * `art` is the image under it, for finishes that follow the art; `tile` means only the art is showing.
+ */
+export function Foil({ kind, id = '', art, tile }: { kind?: string; id?: string; art?: string; tile?: boolean }) {
   if (!kind || !imagesEnabled()) return null;
-  return <div className={`foil foil-${kind}`} aria-hidden />;
+  ensureFoilTextures();
+  const groups = FOIL_LAYERS[kind] ?? FOIL_LAYERS.foil;
+  const seed = foilSeed(id);
+  const style = { '--seed': seed, '--neon': NEON[seed % NEON.length], ...(art ? { '--art': `url("${art}")` } : {}) } as CSSProperties;
+  return (
+    <div className={`foil foil-${kind} ${tile ? 'tile' : ''}`} style={style} aria-hidden>
+      {groups.map((layers, g) => (
+        <div key={g} className={`fx g${g}`}>
+          {layers.map((l, i) => (
+            <i key={i} className={`m ${l}`} />
+          ))}
+        </div>
+      ))}
+      <i className="glare" />
+    </div>
+  );
 }
 
 /** "Galaxy foil · Showcase · Borderless" */
@@ -133,7 +153,7 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
           </div>
         </div>
       )}
-      {useImage && <Foil kind={card.foil} />}
+      {useImage && <Foil kind={card.foil} id={card.id} art={src} />}
       {card.power !== undefined && card.zone === 'battlefield' && (
         <div className={`pt ${buffed ? 'buff' : ''} ${debuffed ? 'debuff' : ''} ${card.damage ? 'damaged' : ''}`}>
           {card.power}/{card.toughness! - card.damage}
@@ -206,7 +226,7 @@ export function CardPreview({ card }: { card: CardView }) {
         <div className={`preview-img ${loaded ? 'loaded' : ''}`}>
           <img src={card.image ?? imageUrl(card.name)} alt={card.name} onLoad={() => setLoaded(true)} onError={() => setImgFailed(true)} />
           {!loaded && <span className="preview-img-name">{card.name}</span>}
-          <Foil kind={card.foil} />
+          <Foil kind={card.foil} id={card.id} art={card.image ?? imageUrl(card.name)} />
         </div>
       ) : (
         <div className="preview-text">

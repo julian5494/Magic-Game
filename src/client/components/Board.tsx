@@ -196,6 +196,7 @@ export function Permanent({
         >
           <div className="face" style={faceStyle(a.p.card, mode === 'full' ? fullUrl(a.p.card) : artUrl(a.p.card))}>
             {(!imagesEnabled() || (a.p.card.token && !a.p.card.image)) && <TextFace card={a.p.card} mode={mode} />}
+            {imagesEnabled() && <Foil kind={a.p.card.foil} id={a.p.card.id} art={mode === 'full' ? fullUrl(a.p.card) : artUrl(a.p.card)} tile={mode === 'tile'} />}
           </div>
         </div>
       ))}
@@ -230,7 +231,7 @@ export function Permanent({
             {showImg && <img src={src} alt="" style={{ display: 'none' }} onError={() => setImgFailed(true)} />}
             {!showImg && <TextFace card={c} mode={mode} />}
             {mode === 'tile' && showImg && <div className="banner">{c.name}</div>}
-            {showImg && <Foil kind={c.foil} />}
+            {showImg && <Foil kind={c.foil} id={c.id} art={src} tile={mode === 'tile'} />}
             {rune && <RuneCircle kind={rune} />}
             {kw('Indestructible') && <div className="shine" />}
           </div>

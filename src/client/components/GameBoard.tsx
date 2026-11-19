@@ -7,6 +7,7 @@ import type { CardView, GameView, PlayerView, StackView } from '../../engine/vie
 import type { ClientMessage } from '../../shared/protocol';
 import type { NetState } from '../net';
 import { previewCombat, type CombatPreview, type PlannedAttack } from '../combat';
+import { trackFoilPointer } from '../foil';
 import { artUrl, Battlefield, MatPicker, SEAT_COLORS, useMats, type PermProps, type PreviewMark } from './Board';
 import { Card, CardPreview, IMAGES_KEY, imagesEnabled, ManaText } from './Card';
 import { DecisionModal, LogPanel, nameOfPlayer, PhaseTracker, StackPanel, STEP_LABELS, XModal, ZoneModal, type ZoneOpen } from './parts';
@@ -85,6 +86,8 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     else hoverTimer.current = window.setTimeout(() => show(null), 200);
   }, []);
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+  // Foil cards catch the light where the pointer is.
+  useEffect(() => trackFoilPointer(), []);
   const [previewSide, setPreviewSide] = useState<'left' | 'right'>('left');
   const hover = hoverCard ? view.cards[hoverCard.id] ?? hoverCard : null;
   const [pending, setPending] = useState<Pending | null>(null);
@@ -896,7 +899,7 @@ function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose:
   );
 
   return (
-    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
+    <div className={`tavern q-${table.quality} ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
       <div className="table3d" ref={tableRef} />
       {table3d ? createPortal(planeEl, boardEl) : <div className="stage">{planeEl}</div>}
 

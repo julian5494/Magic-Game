@@ -1,14 +1,59 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CardId, Keyword, PlayerId } from '../../engine/types';
 import type { CardView, GameView, PlayerView } from '../../engine/view';
 import type { NetState } from '../net';
 import { GameBoard } from './GameBoard';
+import { Foil, imageUrl } from './Card';
+import { trackFoilPointer } from '../foil';
 
 /**
  * A static table for checking the board visuals without playing a game:
  * open /?showcase=effects, /?showcase=combat, /?showcase=blocks or /?showcase=foils.
  */
 export function Showcase({ scene }: { scene: string }) {
+  if (scene === 'gallery') return <FoilGallery />;
+  return <ShowcaseTable scene={scene} />;
+}
+
+const GALLERY: [string, string, string][] = [
+  ['foil', 'Foil', 'Serra Angel'],
+  ['etched', 'Etched foil', 'Swords to Plowshares'],
+  ['galaxy', 'Galaxy foil', 'Sakura-Tribe Elder'],
+  ['surge', 'Surge foil', 'Lightning Bolt'],
+  ['halo', 'Halo foil', 'Birds of Paradise'],
+  ['confetti', 'Confetti foil', 'Eternal Witness'],
+  ['textured', 'Textured foil', 'Thragtusk'],
+  ['oilslick', 'Oil slick foil', 'Sheoldred, the Apocalypse'],
+  ['gilded', 'Gilded foil', 'Sol Ring'],
+  ['rainbow', 'Double rainbow foil', 'Arcane Signet'],
+  ['fracture', 'Fracture foil', 'Lightning Greaves'],
+  ['ripple', 'Ripple foil', 'Swiftfoot Boots'],
+  ['raised', 'Raised foil', 'Glorious Anthem'],
+  ['neon', 'Neon ink', 'Rhystic Study'],
+];
+
+/** Every foil finish, large, side by side (move the pointer over a card to tilt it into the light). */
+function FoilGallery() {
+  useEffect(() => trackFoilPointer(), []);
+  return (
+    <div className="foil-gallery">
+      {GALLERY.map(([kind, label, name]) => (
+        <figure key={kind}>
+          <div className="gallery-card" data-card-id={`g-${kind}`}>
+            <img src={imageUrl(name)} alt={name} />
+            <Foil kind={kind} id={`g-${kind}`} art={imageUrl(name)} />
+          </div>
+          <figcaption>
+            {label}
+            <small>{name}</small>
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function ShowcaseTable({ scene }: { scene: string }) {
   const [view] = useState(() => (scene === 'combat' ? combatScene() : scene === 'blocks' ? combatScene(true) : scene === 'foils' ? foilScene() : effectsScene()));
   const net: NetState = {
     connected: true,
