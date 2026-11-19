@@ -8,6 +8,8 @@ import type { ClientMessage } from '../../shared/protocol';
 import type { NetState } from '../net';
 import { previewCombat, type CombatPreview, type PlannedAttack } from '../combat';
 import { trackFoilPointer } from '../foil';
+import { useGameSounds } from '../gameSounds';
+import { sound } from '../sound';
 import { artUrl, Battlefield, MatPicker, SEAT_COLORS, useMats, type PermProps, type PreviewMark } from './Board';
 import { Card, CardPreview, IMAGES_KEY, imagesEnabled, ManaText } from './Card';
 import { DecisionModal, LogPanel, nameOfPlayer, PhaseTracker, StackPanel, STEP_LABELS, XModal, ZoneModal, type ZoneOpen } from './parts';
@@ -88,6 +90,20 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
   // Foil cards catch the light where the pointer is.
   useEffect(() => trackFoilPointer(), []);
+  // Sounds: game events, a soft click on buttons, and the hearth crackling while you play.
+  useGameSounds(view);
+  useEffect(() => {
+    sound.wantHearth(true);
+    const onClick = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('.tbtn, .pop-use, .pop-cancel, .held-caption button')) sound.play('click');
+    };
+    document.addEventListener('click', onClick, true);
+    return () => {
+      sound.wantHearth(false);
+      document.removeEventListener('click', onClick, true);
+    };
+  }, []);
+  const soundPrefs = useSoundPrefs();
   const [previewSide, setPreviewSide] = useState<'left' | 'right'>('left');
   const hover = hoverCard ? view.cards[hoverCard.id] ?? hoverCard : null;
   const [pending, setPending] = useState<Pending | null>(null);
@@ -105,6 +121,12 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [aiming, setAiming] = useState(false);
   /** A card taken out of the hand (or command zone) to be played: shown above the hand until it's cast or cancelled. */
   const [held, setHeld] = useState<CardId | null>(null);
+  // Lifting a card out of the hand makes a soft whoosh.
+  const heldBefore = useRef<CardId | null>(null);
+  useEffect(() => {
+    if (held && !heldBefore.current) sound.play('pickup');
+    heldBefore.current = held;
+  }, [held]);
   const suppressClick = useRef(false);
   const [topPin, setTopPin] = useState<PlayerId | null>(null);
   const [fullBoard, setFullBoard] = useState<PlayerId | null>(null);
@@ -174,6 +196,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   /** Put everything down: pending cast/ability, menus, held card, half-made blocks. */
   const cancelAll = useCallback(() => {
+    if (heldBefore.current) sound.play('cancel');
     setPending(null);
     setMenu(null);
     setHeld(null);
@@ -1122,6 +1145,24 @@ function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose:
                 </select>
               </label>
             )}
+            <label className="sound-row">
+              Sound{' '}
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(soundPrefs.volume * 100)}
+                onChange={(e) => sound.setVolume(Number(e.target.value) / 100)}
+                onPointerUp={() => sound.play('counter')}
+                aria-label="Sound volume"
+              />
+            </label>
+            <label>
+              <input type="checkbox" checked={soundPrefs.muted} onChange={(e) => sound.setMuted(e.target.checked)} /> Mute
+            </label>
+            <label>
+              <input type="checkbox" checked={soundPrefs.ambience} onChange={(e) => sound.setAmbience(e.target.checked)} /> Crackling hearth
+            </label>
             <MatPicker value={matOf(view.you)} onChange={(m) => setMat(view.you, m)} label="My playmat" />
             <button className="tbtn quiet" onClick={() => confirm('Concede this game?') && act({ type: 'concede' })}>
               Concede
@@ -1397,4 +1438,11 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
       })}
     </svg>
   );
+}
+
+/** Re-render when the sound settings change. */
+function useSoundPrefs() {
+  const [, bump] = useState(0);
+  useEffect(() => sound.subscribe(() => bump((n) => n + 1)), []);
+  return { volume: sound.volume, muted: sound.muted, ambience: sound.ambience };
 }

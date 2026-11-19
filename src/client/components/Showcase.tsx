@@ -5,6 +5,7 @@ import type { NetState } from '../net';
 import { GameBoard } from './GameBoard';
 import { Foil, imageUrl } from './Card';
 import { trackFoilPointer } from '../foil';
+import { sound, SOUND_NAMES, type SoundName, type SoundOpts } from '../sound';
 
 /**
  * A static table for checking the board visuals without playing a game:
@@ -12,6 +13,7 @@ import { trackFoilPointer } from '../foil';
  */
 export function Showcase({ scene }: { scene: string }) {
   if (scene === 'gallery') return <FoilGallery />;
+  if (scene === 'sounds') return <SoundBoard />;
   return <ShowcaseTable scene={scene} />;
 }
 
@@ -31,6 +33,61 @@ const GALLERY: [string, string, string][] = [
   ['raised', 'Raised foil', 'Glorious Anthem'],
   ['neon', 'Neon ink', 'Rhystic Study'],
 ];
+
+const SOUND_LABELS: Partial<Record<SoundName, string>> = {
+  draw: 'Draw a card', shuffle: 'Shuffle / mulligan', land: 'Play a land', cast: 'Cast a spell', commander: 'Cast your commander',
+  ability: 'Ability or trigger', resolve: 'Instant or sorcery resolves', creature: 'Creature enters', permanent: 'Artifact or enchantment enters',
+  token: 'Token created', tap: 'Tap', counter: 'Counter added (die)', attack: 'Attack', block: 'Block', damage: 'Combat damage',
+  dies: 'Creature dies', destroy: 'Permanent destroyed', exile: 'Exiled', bounce: 'Returned to hand', countered: 'Spell countered',
+  lifeGain: 'Gain life', lifeLoss: 'Lose life', monarch: 'Become the monarch', yourTurn: 'Your turn', theirTurn: "Opponent's turn",
+  prompt: 'A choice for you', pickup: 'Pick up a card', cancel: 'Put it back', click: 'Button', win: 'You win', lose: 'You lose',
+};
+
+/** Every sound, to audition (/?showcase=sounds). */
+function SoundBoard() {
+  const [, bump] = useState(0);
+  useEffect(() => sound.subscribe(() => bump((n) => n + 1)), []);
+  useEffect(() => {
+    (window as unknown as { __sound: typeof sound }).__sound = sound;
+  }, []);
+  const extra: [string, SoundName, SoundOpts][] = [
+    ['Cast: white', 'cast', { colors: ['W'] }],
+    ['Cast: blue', 'cast', { colors: ['U'] }],
+    ['Cast: black', 'cast', { colors: ['B'] }],
+    ['Cast: red', 'cast', { colors: ['R'] }],
+    ['Cast: green', 'cast', { colors: ['G'] }],
+    ['Cast: gold (W/B)', 'cast', { colors: ['W', 'B'] }],
+    ['Creature enters: 1-drop', 'creature', { size: 0.1, colors: ['G'] }],
+    ['Creature enters: huge', 'creature', { size: 1, colors: ['G'] }],
+  ];
+  return (
+    <div className="sound-board">
+      <h1>Sound board</h1>
+      <p>
+        Every sound in the game is made in your browser. Volume{' '}
+        <input type="range" min={0} max={100} value={Math.round(sound.volume * 100)} onChange={(e) => sound.setVolume(Number(e.target.value) / 100)} />{' '}
+        <label>
+          <input type="checkbox" checked={sound.ambience} onChange={(e) => sound.setAmbience(e.target.checked)} onClick={() => sound.wantHearth(true)} /> Crackling hearth
+        </label>
+      </p>
+      <div className="sound-grid">
+        {SOUND_NAMES.map((n) => (
+          <button key={n} className="tbtn" onClick={() => sound.play(n, n === 'cast' || n === 'resolve' || n === 'creature' || n === 'commander' ? { colors: ['W', 'U'] } : {})}>
+            {SOUND_LABELS[n] ?? n}
+          </button>
+        ))}
+      </div>
+      <h2>Variations</h2>
+      <div className="sound-grid">
+        {extra.map(([label, n, o]) => (
+          <button key={label} className="tbtn" onClick={() => sound.play(n, o)}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** Every foil finish, large, side by side (move the pointer over a card to tilt it into the light). */
 function FoilGallery() {
