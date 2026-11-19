@@ -497,14 +497,14 @@ export class TableScene {
   /** Ease the camera toward the mouse (and a slow idle drift). Returns true if it moved. */
   private moveCamera(t: number, dt: number): boolean {
     const cam = this.camera;
-    const want = this.calm ? new THREE.Vector2(0, 0) : new THREE.Vector2(this.mouse.x + Math.sin(t * 0.21) * 0.12, this.mouse.y + Math.sin(t * 0.17 + 1) * 0.1);
+    const want = this.calm ? new THREE.Vector2(0, 0) : new THREE.Vector2(this.mouse.x + Math.sin(t * 0.15) * 0.06, this.mouse.y + Math.sin(t * 0.12 + 1) * 0.05);
     const before = this.sway.clone();
     // Time-based easing, so the drift feels the same at any frame rate.
-    this.sway.lerp(want, 1 - Math.exp(-dt * 2.5));
+    this.sway.lerp(want, 1 - Math.exp(-dt * 1.4));
     if (this.sway.distanceTo(before) < 0.0004 && !this.dirty) return false;
     const right = new THREE.Vector3(1, 0, 0);
     const up = new THREE.Vector3(0, Math.cos(PITCH), -Math.sin(PITCH));
-    cam.position.copy(this.basePos).addScaledVector(right, this.sway.x * 26).addScaledVector(up, -this.sway.y * 12);
+    cam.position.copy(this.basePos).addScaledVector(right, this.sway.x * 11).addScaledVector(up, -this.sway.y * 5);
     // Orbit around the middle of the table: near and far things shift against each other (parallax).
     cam.lookAt(this.baseTarget);
     cam.updateMatrixWorld();

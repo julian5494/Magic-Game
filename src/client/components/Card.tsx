@@ -134,43 +134,68 @@ export function Card({ card, size = 'medium', selectable, selected, attacking, b
   );
 }
 
+/**
+ * The big card shown while you hover a card. The image box has a fixed size (no jump while it loads);
+ * with the image showing, only what the printed card doesn't tell you is listed underneath.
+ */
 export function CardPreview({ card }: { card: CardView }) {
   const [imgFailed, setImgFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const useImage = imagesEnabled() && (!card.token || !!card.image) && !imgFailed;
+  const changedPT =
+    card.power !== undefined && (card.power !== card.basePower || card.toughness !== card.baseToughness || card.damage > 0);
+  const counters = Object.entries(card.counters).filter(([, n]) => n > 0);
+  const extras = (
+    <>
+      {changedPT && (
+        <div className="preview-pt">
+          {card.power}/{card.toughness}
+          {card.damage > 0 && <span className="dmg"> ({card.damage} damage)</span>}
+        </div>
+      )}
+      {counters.length > 0 && <div className="preview-kw">{counters.map(([k, n]) => `${n} ${k}`).join(' · ')} counters</div>}
+      {card.keywords.length > 0 && <div className="preview-kw">{card.keywords.join(', ')}</div>}
+      {card.commanderTax ? <div className="preview-kw">Commander tax: +{card.commanderTax}</div> : null}
+      {card.cannotCast && <div className="preview-warn">This card can't be played yet: the game can't enforce all of its rules.</div>}
+      {card.unsupported && (
+        <div className="preview-warn">
+          Not automated (these won't happen):
+          <ul>
+            {card.unsupported.map((u, i) => (
+              <li key={i}>{u}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
   return (
     <div className="preview">
-      {useImage && <img src={card.image ?? imageUrl(card.name)} alt={card.name} onError={() => setImgFailed(true)} />}
-      <div className="preview-text">
-        <div className="card-title">
-          <strong>{card.name}</strong>
-          {card.cost && <ManaText text={card.cost} />}
+      {useImage ? (
+        <div className={`preview-img ${loaded ? 'loaded' : ''}`}>
+          <img src={card.image ?? imageUrl(card.name)} alt={card.name} onLoad={() => setLoaded(true)} onError={() => setImgFailed(true)} />
+          {!loaded && <span className="preview-img-name">{card.name}</span>}
         </div>
-        <div className="card-type">{card.typeLine}</div>
-        {card.text.split('\n').map((l, i) => (
-          <p key={i}>
-            <ManaText text={l} />
-          </p>
-        ))}
-        {card.power !== undefined && (
-          <div className="preview-pt">
-            {card.power}/{card.toughness}
-            {card.damage > 0 && <span className="dmg"> ({card.damage} damage)</span>}
+      ) : (
+        <div className="preview-text">
+          <div className="card-title">
+            <strong>{card.name}</strong>
+            {card.cost && <ManaText text={card.cost} />}
           </div>
-        )}
-        {card.keywords.length > 0 && <div className="preview-kw">{card.keywords.join(', ')}</div>}
-        {card.commanderTax ? <div className="preview-kw">Commander tax: +{card.commanderTax}</div> : null}
-        {card.cannotCast && <div className="preview-warn">This card can't be played yet: the game can't enforce all of its rules.</div>}
-        {card.unsupported && (
-          <div className="preview-warn">
-            Not automated (these won't happen):
-            <ul>
-              {card.unsupported.map((u, i) => (
-                <li key={i}>{u}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+          <div className="card-type">{card.typeLine}</div>
+          {card.text.split('\n').map((l, i) => (
+            <p key={i}>
+              <ManaText text={l} />
+            </p>
+          ))}
+          {card.power !== undefined && !changedPT && (
+            <div className="preview-pt">
+              {card.power}/{card.toughness}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="preview-text preview-extra">{extras}</div>
     </div>
   );
 }

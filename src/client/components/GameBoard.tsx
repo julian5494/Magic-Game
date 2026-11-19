@@ -21,9 +21,9 @@ interface Pending {
   color?: ManaSym;
 }
 
+/** A choice of what to do with a card: its abilities (on the table) or how to cast it (held out of the hand). */
 interface Menu {
   cardId: CardId;
-  items: { label: string; run: () => void }[];
 }
 
 /** The phase-rail step a game step is shown under. */
@@ -65,7 +65,28 @@ type DropTarget = { type: 'card'; id: CardId } | { type: 'player'; id: PlayerId 
 type Extra = HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
 
 export function GameBoard({ view, net, send }: { view: GameView; net: NetState; send: (m: ClientMessage) => void }) {
-  const [hover, setHover] = useState<CardView | null>(null);
+  // Hover preview: shows after a short pause, swaps instantly between cards, and lingers a moment
+  // after the pointer leaves, so it doesn't flicker across card edges, badges or a drifting camera.
+  const [hoverCard, setHoverCard] = useState<CardView | null>(null);
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const hoverShown = useRef<CardView | null>(null);
+  const pointerX = useRef(0);
+  const setHover = useCallback((c: CardView | null) => {
+    window.clearTimeout(hoverTimer.current);
+    const show = (v: CardView | null) => {
+      // Put the preview on the side away from the pointer so it never covers the card you're reading.
+      const x = pointerX.current;
+      if (v && (!hoverShown.current || x < 380 || x > window.innerWidth - 400)) setPreviewSide(x < window.innerWidth * 0.42 ? 'right' : 'left');
+      hoverShown.current = v;
+      setHoverCard(v);
+    };
+    if (c && hoverShown.current) show(c);
+    else if (c) hoverTimer.current = window.setTimeout(() => show(c), 130);
+    else hoverTimer.current = window.setTimeout(() => show(null), 200);
+  }, []);
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+  const [previewSide, setPreviewSide] = useState<'left' | 'right'>('left');
+  const hover = hoverCard ? view.cards[hoverCard.id] ?? hoverCard : null;
   const [pending, setPending] = useState<Pending | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [zone, setZone] = useState<ZoneOpen | null>(null);
@@ -77,8 +98,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [, forceRender] = useState(0);
   const [hold, setHold] = useState(false);
   const [drag, setDrag] = useState<{ id: CardId; kind: DragKind } | null>(null);
-  /** Where the pointer is while aiming an attacker or blocker. */
-  const [aim, setAim] = useState<{ x: number; y: number } | null>(null);
+  /** True while aiming (an attacker, a blocker, or a card pulled out of the hand). */
+  const [aiming, setAiming] = useState(false);
+  /** A card taken out of the hand (or command zone) to be played: shown above the hand until it's cast or cancelled. */
+  const [held, setHeld] = useState<CardId | null>(null);
   const suppressClick = useRef(false);
   const [topPin, setTopPin] = useState<PlayerId | null>(null);
   const [fullBoard, setFullBoard] = useState<PlayerId | null>(null);
@@ -115,13 +138,52 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     }
   }, [decision?.id]);
 
-  // Drop an in-progress cast if it stopped being legal (eg. priority moved).
+  // Drop an in-progress cast if it stopped being legal (eg. priority moved), and close a menu whose card can't act.
   useEffect(() => {
     if (pending && !view.legal.some((a) => a.cardId === pending.action.cardId && a.type === pending.action.type && a.ability === pending.action.ability)) {
       setPending(null);
     }
-    setMenu(null);
+    if (menu && !view.legal.some((a) => a.cardId === menu.cardId)) setMenu(null);
+    if (held && !view.hand.includes(held) && !me.command.includes(held)) setHeld(null);
   }, [view]);
+
+  // A held card goes back to the hand (or on to the stack) once nothing is being done with it.
+  useEffect(() => {
+    if (!held || pending || drag || (menu && menu.cardId === held)) return;
+    const t = window.setTimeout(() => setHeld(null), 380);
+    return () => window.clearTimeout(t);
+  }, [held, pending, drag, menu]);
+
+  /** A card that can't be played right now gives a little shake and says why (as best we can tell). */
+  const [nope, setNope] = useState<{ id: CardId; text: string } | null>(null);
+  const refuse = (id: CardId) => {
+    const name = view.cards[id]?.name ?? 'That card';
+    const text = view.phase !== 'playing' || !view.canPass
+      ? `Wait for your priority to play ${name}.`
+      : `You can't play ${name} right now: not enough mana, or not the right time for it.`;
+    setNope({ id, text });
+  };
+  useEffect(() => {
+    if (!nope) return;
+    const t = window.setTimeout(() => setNope(null), 2200);
+    return () => window.clearTimeout(t);
+  }, [nope]);
+
+  /** Put everything down: pending cast/ability, menus, held card, half-made blocks. */
+  const cancelAll = useCallback(() => {
+    setPending(null);
+    setMenu(null);
+    setHeld(null);
+    setSelBlocker(null);
+    setSelectedHand(null);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cancelAll();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cancelAll]);
 
   // ---------- Targeting ----------
   const targeting: { specs: TargetSpecView[]; chosen: (Target | null)[] } | null =
@@ -179,18 +241,41 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   const actionsFor = (id: CardId) => view.legal.filter((a) => a.cardId === id);
 
-  const openMenu = (id: CardId) => {
-    const acts = actionsFor(id);
-    const items: Menu['items'] = [];
-    for (const a of acts) {
+  /** The buttons for a card's menu, built from what is legal right now. */
+  const menuItems = (id: CardId): { label: string; run: () => void }[] => {
+    const items: { label: string; run: () => void }[] = [];
+    for (const a of actionsFor(id)) {
       if ((a.type === 'manaTap' || a.isMana) && a.manaColors && a.manaColors.length > 1) {
         for (const c of a.manaColors) items.push({ label: `${a.isMana ? a.label.split(':')[0] + ': ' : ''}Add {${c}}`, run: () => startAction(a, c) });
       } else {
-        items.push({ label: a.type === 'cast' && !a.modes ? `Cast ${view.cards[id]?.name}` : a.label, run: () => startAction(a) });
+        items.push({ label: a.type === 'cast' && !a.modes ? `Cast ${view.cards[id]?.name}` : a.type === 'playLand' ? `Play ${view.cards[id]?.name}` : a.label, run: () => startAction(a) });
       }
     }
-    if (items.length === 1 && !(acts[0].type === 'manaTap' && (acts[0].manaColors?.length ?? 0) > 1)) return startAction(acts[0]);
-    if (items.length) setMenu({ cardId: id, items });
+    return items;
+  };
+
+  /** Clicking a card on the table: select it and ask which ability to use (nothing happens until you confirm). */
+  const openMenu = (id: CardId) => {
+    if (isInHand(id)) return playFromHand(id);
+    if (actionsFor(id).length) setMenu({ cardId: id });
+  };
+
+  /**
+   * Play a card from your hand or command zone. Lands go straight onto the table; spells come out of the hand
+   * and wait above it while you pick targets (or how to cast them, when there's more than one way).
+   */
+  const playFromHand = (id: CardId) => {
+    const acts = actionsFor(id).filter((a) => a.type !== 'manaTap' && !a.isMana);
+    if (!acts.length) return refuse(id);
+    setSelectedHand(null);
+    setMenu(null);
+    if (acts.length === 1 && acts[0].type === 'playLand') {
+      setHeld(id);
+      return startAction(acts[0]);
+    }
+    setHeld(id);
+    if (acts.length === 1) startAction(acts[0]);
+    else setMenu({ cardId: id });
   };
 
   // ---------- Clicks ----------
@@ -234,11 +319,13 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       }
       return;
     }
+    if (isInHand(id) && clickToPlay) return playFromHand(id);
     if (isInHand(id) && !clickToPlay) {
-      // Cards in hand are played by double-clicking or dragging them onto the battlefield.
+      // Cards in hand are played by double-clicking or dragging them onto the table.
       setSelectedHand(selectedHand === id ? null : id);
       return;
     }
+    if (menu?.cardId === id) return setMenu(null);
     openMenu(id);
   };
 
@@ -328,13 +415,17 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const sy = e.clientY;
     let started = false;
     const move = (ev: PointerEvent) => {
-      if (!started && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 7) return;
-      if (!started) {
-        started = true;
-        setHover(null);
-        setDrag(d);
+      if (started || Math.hypot(ev.clientX - sx, ev.clientY - sy) < 7) return;
+      started = true;
+      setHover(null);
+      setMenu(null);
+      setDrag(d);
+      setAiming(true);
+      if (d.kind === 'hand') {
+        setPending(null);
+        setSelectedHand(null);
+        setHeld(d.id);
       }
-      setAim({ x: ev.clientX, y: ev.clientY });
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
@@ -343,14 +434,36 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       if (!started) return;
       suppressClick.current = true;
       setTimeout(() => (suppressClick.current = false), 0);
-      setAim(null);
-      const t = ev.type === 'pointerup' ? dropTargetAt(ev.clientX, ev.clientY, d) : null;
+      setAiming(false);
+      if (ev.type !== 'pointerup') return setDrag(null);
+      if (d.kind === 'hand') return dropFromHand(ev.clientX, ev.clientY, d);
+      const t = dropTargetAt(ev.clientX, ev.clientY, d);
       if (t) handleDrop(t, d);
       else setDrag(null);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
+  };
+
+  /**
+   * Let go of a card pulled out of the hand: over a legal target, a single-target spell is cast at it;
+   * back over the hand, it's put back; anywhere else on the table, it's played (targets are chosen next).
+   */
+  const dropFromHand = (x: number, y: number, d: Drag) => {
+    setDrag(null);
+    const el = document.elementFromPoint(x, y);
+    if (!el || el.closest('.hand-fan, .strip')) return setHeld(null);
+    const cardId = el.closest('[data-card-id]')?.getAttribute('data-card-id');
+    const playerId = el.closest('[data-player-id]')?.getAttribute('data-player-id');
+    const t: Target | null = cardId && cardId !== d.id ? { type: 'card', id: cardId } : playerId ? { type: 'player', id: playerId } : null;
+    const a = t ? directCast(d.id, t) : undefined;
+    if (a && t) {
+      const full = a.targets[0].options.find((o) => sameTarget(o, t))!;
+      act({ type: 'cast', cardId: d.id, targets: [full], modes: a.modes, variant: a.variant, hold });
+      return;
+    }
+    playFromHand(d.id);
   };
 
   const dropProps = (t: DropTarget): Extra => {
@@ -412,25 +525,16 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const extra: Extra = { ...dropProps({ type: 'card', id }) };
     const dropOk = !!drag && drag.id !== id && canDrop({ type: 'card', id });
     const kind = dragKindFor(id);
-    if (kind === 'attacker' || kind === 'blocker') {
-      extra.onPointerDown = (e) => startAim(e, { id, kind });
-    } else if (kind) {
-      extra.draggable = true;
-      extra.onDragStart = (e: DragEvent) => {
-        e.dataTransfer.setData('text/plain', id);
-        e.dataTransfer.effectAllowed = 'move';
-        setHover(null);
-        setDrag({ id, kind });
-      };
-      extra.onDragEnd = () => setDrag(null);
-    }
+    if (kind) extra.onPointerDown = (e) => startAim(e, { id, kind });
     if (isInHand(id)) {
       extra.onDoubleClick = () => {
         setSelectedHand(null);
-        if (!decision && !targeting && !pending) openMenu(id);
+        if (decision || targeting || pending) return;
+        playFromHand(id);
       };
       if (selectedHand === id) selected = true;
     }
+    if (menu?.cardId === id) selected = true;
     if (drag?.id === id) selected = true;
     return { card: c, selectable: selectable || dropOk, selected, attacking, blocking, badge, extra, dropOk };
   };
@@ -514,7 +618,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [handHover, setHandHover] = useState(false);
   // Track the pointer globally: when a card you just played disappears from under the cursor, the hand still tucks away.
   useEffect(() => {
-    const onMove = (e: PointerEvent) => setHandHover(!!(e.target as Element | null)?.closest?.('.hand-fan, .my-die3d'));
+    const onMove = (e: PointerEvent) => {
+      pointerX.current = e.clientX;
+      setHandHover(!!(e.target as Element | null)?.closest?.('.hand-fan, .my-die3d'));
+    };
     window.addEventListener('pointermove', onMove);
     return () => window.removeEventListener('pointermove', onMove);
   }, []);
@@ -559,7 +666,41 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   }
   const lifeAfter = (pid: PlayerId) => (preview && preview.life[pid] ? (view.players.find((p) => p.id === pid)?.life ?? 0) + preview.life[pid] : undefined);
 
-  // ---------- Arrows ----------
+  // ---------- Ability popover ----------
+
+/** A small panel above a card (follows it while the camera drifts), with the card's choices. */
+function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    let raf = 0;
+    const place = () => {
+      const el = ref.current;
+      const target = document.querySelector(anchor);
+      if (el && target) {
+        const r = target.getBoundingClientRect();
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        let x = r.left + r.width / 2 - w / 2;
+        let y = r.top - h - 12;
+        if (y < 8) y = r.bottom + 12;
+        x = Math.max(8, Math.min(window.innerWidth - w - 8, x));
+        y = Math.max(8, Math.min(window.innerHeight - h - 8, y));
+        el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+        el.style.visibility = 'visible';
+      } else if (!target) onClose();
+      raf = requestAnimationFrame(place);
+    };
+    place();
+    return () => cancelAnimationFrame(raf);
+  }, [anchor, onClose]);
+  return (
+    <div ref={ref} className="action-pop" style={{ visibility: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+      {children}
+    </div>
+  );
+}
+
+// ---------- Arrows ----------
   const arrows: Arrow[] = [];
   const toSel = (t: Target | string) =>
     typeof t === 'string'
@@ -590,8 +731,15 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   for (const s of view.stack) {
     for (const t of s.targets) if (t) arrows.push({ from: `[data-stack-id="${s.id}"]`, to: toSel(t), kind: 'target' });
   }
-  if (drag && aim && drag.kind !== 'hand') {
-    arrows.push({ from: `[data-card-id="${drag.id}"]`, to: '', toPoint: aim, kind: drag.kind === 'blocker' ? 'block' : 'attack', pending: true });
+  // Aiming arrows are only drawn on your screen, until the action is confirmed.
+  if (drag && aiming) {
+    const from = drag.kind === 'hand' ? '.held-card .card' : `[data-card-id="${drag.id}"]`;
+    arrows.push({ from, to: '', toPointer: true, kind: drag.kind === 'blocker' ? 'block' : drag.kind === 'hand' ? 'target' : 'attack', pending: true });
+  }
+  if (pending && !drag) {
+    const from = held === pending.action.cardId ? '.held-card .card' : `[data-card-id="${pending.action.cardId}"]`;
+    for (const t of pending.targets) if (t) arrows.push({ from, to: toSel(t), kind: 'target' });
+    if (pending.stage === 'targets' && spec) arrows.push({ from, to: '', toPointer: true, kind: 'target', pending: true });
   }
 
   const playerSelectable = (pid: PlayerId) =>
@@ -660,7 +808,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       >
         <div className="grain" />
         <div className="stitch" />
-        {side === 'near' && drag?.kind === 'hand' && <div className="drop-hint">Drop to play {view.cards[drag.id]?.name}</div>}
+        {side === 'near' && drag?.kind === 'hand' && <div className="drop-hint">Let go anywhere on the table to play {view.cards[drag.id]?.name}</div>}
         <div className="matgrid">
           {side === 'near' ? cmd : piles}
           <div className="mat-rows">{board(p.id, mode, side === 'far')}</div>
@@ -748,7 +896,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 
   return (
-    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)}>
+    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
       <div className="table3d" ref={tableRef} />
       {table3d ? createPortal(planeEl, boardEl) : <div className="stage">{planeEl}</div>}
 
@@ -827,7 +975,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       </div>
 
       {/* Only shown when you need to choose something. */}
-      {(prompt || buttons.some((b) => b.at === 'prompt')) && (
+      {(prompt || buttons.some((b) => b.at === 'prompt')) && !(held && pending) && (
         <div className="hud prompt-pill">
           <span>{prompt}</span>
           {buttons.filter((b) => b.at === 'prompt').map(btn)}
@@ -887,7 +1035,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               props.card && (
                 <div
                   key={id}
-                  className="handcard"
+                  className={`handcard ${held === id ? 'out' : ''} ${nope?.id === id ? 'nope' : ''}`}
                   style={{ ['--x' as string]: `${pos.x}px`, ['--a' as string]: `${pos.a}deg`, ['--y' as string]: `${pos.y}px`, zIndex: pos.z }}
                 >
                   <Card {...props} size="large" onClick={() => onCardClick(id)} onHover={setHover} />
@@ -1001,23 +1149,64 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
       <ArrowLayer arrows={arrows} />
 
-      {hover && !drag && (
-        <div className="preview-wrap">
-          <CardPreview card={hover} />
+      {hover && !drag && !aiming && (
+        <div className={`preview-wrap side-${previewSide}`}>
+          <CardPreview key={hover.id} card={hover} />
         </div>
       )}
 
-      {menu && (
-        <div className="menu-backdrop" onClick={() => setMenu(null)}>
-          <div className="menu" onClick={(e) => e.stopPropagation()}>
-            <div className="menu-title">{view.cards[menu.cardId]?.name}</div>
-            {menu.items.map((it, i) => (
-              <button key={i} onClick={() => { setMenu(null); it.run(); }}>
-                <ManaText text={it.label} />
-              </button>
-            ))}
-          </div>
+      {nope && <div className="hud nope-hint">{nope.text}</div>}
+
+      {/* The card you're playing, out of your hand: what it's doing next, with a way to put it back. */}
+      {held && view.cards[held] && (
+        <div className={`held-card ${pending ? 'busy' : ''}`}>
+          <Card card={view.cards[held]} size="large" showTapped={false} />
+          {(pending || menu?.cardId === held) && (
+            <div className="held-caption" onClick={(e) => e.stopPropagation()}>
+              {pending && <div className="held-prompt">{prompt}</div>}
+              {!pending && menu?.cardId === held && (
+                <div className="held-options">
+                  {menuItems(held).map((it, i) => (
+                    <button key={i} className="tbtn" onClick={() => it.run()}>
+                      <ManaText text={it.label} />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="held-buttons">
+                {buttons.filter((b) => b.at === 'prompt' && b.label !== 'Cancel').map(btn)}
+                <button className="tbtn quiet" onClick={cancelAll}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {menu && menu.cardId !== held && view.cards[menu.cardId] && (
+        <ActionPopover anchor={`[data-card-id="${menu.cardId}"]`} onClose={() => setMenu(null)}>
+          <div className="pop-title">{view.cards[menu.cardId].name}</div>
+          {menuItems(menu.cardId).map((it, i) => (
+            <button
+              key={i}
+              className="pop-use"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenu(null);
+                it.run();
+              }}
+            >
+              <span className="pop-verb">Use</span>
+              <span className="pop-label">
+                <ManaText text={it.label} />
+              </span>
+            </button>
+          ))}
+          <button className="tbtn quiet pop-cancel" onClick={(e) => { e.stopPropagation(); setMenu(null); }}>
+            Cancel
+          </button>
+        </ActionPopover>
       )}
 
       {pending?.stage === 'x' && (
@@ -1063,13 +1252,47 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 }
 
+// ---------- Ability popover ----------
+
+/** A small panel above a card (follows it while the camera drifts), with the card's choices. */
+function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    let raf = 0;
+    const place = () => {
+      const el = ref.current;
+      const target = document.querySelector(anchor);
+      if (el && target) {
+        const r = target.getBoundingClientRect();
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        let x = r.left + r.width / 2 - w / 2;
+        let y = r.top - h - 12;
+        if (y < 8) y = r.bottom + 12;
+        x = Math.max(8, Math.min(window.innerWidth - w - 8, x));
+        y = Math.max(8, Math.min(window.innerHeight - h - 8, y));
+        el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+        el.style.visibility = 'visible';
+      } else if (!target) onClose();
+      raf = requestAnimationFrame(place);
+    };
+    place();
+    return () => cancelAnimationFrame(raf);
+  }, [anchor, onClose]);
+  return (
+    <div ref={ref} className="action-pop" style={{ visibility: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+      {children}
+    </div>
+  );
+}
+
 // ---------- Arrows ----------
 
 interface Arrow {
   from: string;
   to: string;
-  /** Point the arrow at a screen position instead of an element (aiming). */
-  toPoint?: { x: number; y: number };
+  /** Point the arrow at the mouse pointer (aiming). */
+  toPointer?: boolean;
   kind: 'attack' | 'block' | 'target' | 'trample';
   pending?: boolean;
   label?: string;
@@ -1095,6 +1318,15 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
   const arrowsRef = useRef(arrows);
   arrowsRef.current = arrows;
   const last = useRef('');
+  // The pointer is tracked here, not in React state, so aiming doesn't re-render the whole table.
+  const pointer = useRef({ x: 0, y: 0 });
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      pointer.current = { x: e.clientX, y: e.clientY };
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    return () => window.removeEventListener('pointermove', onMove);
+  }, []);
   const measure = useCallback(() => {
     const center = (sel: string) => {
       const el = document.querySelector(sel);
@@ -1106,8 +1338,8 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
     const next = arrowsRef.current
       .map((a) => {
         const p = center(a.from);
-        const q = a.toPoint ?? center(a.to);
-        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending, label: a.label, free: !!a.toPoint } : null;
+        const q = a.toPointer ? pointer.current : center(a.to);
+        return p && q ? { x1: p.x, y1: p.y, x2: q.x, y2: q.y, kind: a.kind, pending: a.pending, label: a.label, free: !!a.toPointer } : null;
       })
       .filter(Boolean) as Line[];
     const sig = JSON.stringify(next.map((l) => [Math.round(l.x1), Math.round(l.y1), Math.round(l.x2), Math.round(l.y2), l.kind, l.label, l.pending]));
