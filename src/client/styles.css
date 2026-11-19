@@ -812,19 +812,19 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
   opacity: calc(var(--glare, 0) * .85); translate: calc((var(--mx, .5) - .5) * 45.4%) calc((var(--my, .5) - .5) * 45.4%); transition: translate .18s ease-out, opacity .4s; }
 
 /* --- the printed patterns (fixed to the card; the light moves over them) ---------------------------- */
-.foil .m.stars { background: var(--fx-stars) 0 0 / max(100%, 300px) auto repeat; mix-blend-mode: multiply; }
+.foil .m.stars { background: var(--fx-stars, linear-gradient(#000 0 0)) 0 0 / max(100%, 300px) auto repeat; mix-blend-mode: multiply; }
 .foil .fx > .m.stars:first-child { mix-blend-mode: normal; }
-.foil .m.sparkles { background: var(--fx-sparkles) 0 0 / max(100%, 300px) auto repeat; animation: fxTwinkle 2.6s ease-in-out infinite alternate; animation-delay: calc(var(--seed, 0) * -.11s); }
-.foil .m.glints { background: var(--fx-glints) 0 0 / max(100%, 260px) auto repeat; animation: fxTwinkle 1.7s ease-in-out infinite alternate; animation-delay: calc(var(--seed, 0) * -.07s); }
+.foil .m.sparkles { background: var(--fx-sparkles, linear-gradient(#000 0 0)) 0 0 / max(100%, 300px) auto repeat; animation: fxTwinkle 2.6s ease-in-out infinite alternate; animation-delay: calc(var(--seed, 0) * -.11s); }
+.foil .m.glints { background: var(--fx-glints, linear-gradient(#000 0 0)) 0 0 / max(100%, 260px) auto repeat; animation: fxTwinkle 1.7s ease-in-out infinite alternate; animation-delay: calc(var(--seed, 0) * -.07s); }
 @keyframes fxTwinkle { 0% { opacity: .1; } 100% { opacity: 1; } }
-.foil .m.confetti { background: var(--fx-confetti) 0 0 / max(100%, 260px) auto repeat; animation: fxHue 10s linear infinite; animation-delay: calc(var(--seed, 0) * -.4s); }
-.foil .m.waves { background: var(--fx-waves) 0 0 / max(58%, 150px) auto repeat; mix-blend-mode: multiply; }
-.foil .m.swirl { background: var(--fx-swirl) 50% 45% / 120% auto no-repeat; mix-blend-mode: multiply; }
-.foil .m.rings { background: var(--fx-rings) center / cover no-repeat; mix-blend-mode: multiply; }
-.foil .m.relief { background: var(--fx-relief) center / max(100%, 280px) auto; }
-.foil .m.etch { background: var(--fx-etch) 0 0 / 64px 64px repeat; mix-blend-mode: multiply; }
-.foil .m.shards { background: var(--fx-shards) 0 0 / max(100%, 280px) auto repeat; animation: fxHue 12s linear infinite; animation-delay: calc(var(--seed, 0) * -.5s); }
-.foil .m.oil { background: var(--fx-oil) center / cover no-repeat; animation: fxHue 14s linear infinite; animation-delay: calc(var(--seed, 0) * -.6s); }
+.foil .m.confetti { background: var(--fx-confetti, linear-gradient(#000 0 0)) 0 0 / max(100%, 260px) auto repeat; animation: fxHue 10s linear infinite; animation-delay: calc(var(--seed, 0) * -.4s); }
+.foil .m.waves { background: var(--fx-waves, linear-gradient(#000 0 0)) 0 0 / max(58%, 150px) auto repeat; mix-blend-mode: multiply; }
+.foil .m.swirl { background: var(--fx-swirl, linear-gradient(#000 0 0)) 50% 45% / 120% auto no-repeat; mix-blend-mode: multiply; }
+.foil .m.rings { background: var(--fx-rings, linear-gradient(#000 0 0)) center / cover no-repeat; mix-blend-mode: multiply; }
+.foil .m.relief { background: var(--fx-relief, linear-gradient(#808080 0 0)) center / max(100%, 280px) auto; }
+.foil .m.etch { background: var(--fx-etch, linear-gradient(#fff 0 0)) 0 0 / 64px 64px repeat; mix-blend-mode: multiply; }
+.foil .m.shards { background: var(--fx-shards, linear-gradient(#000 0 0)) 0 0 / max(100%, 280px) auto repeat; animation: fxHue 12s linear infinite; animation-delay: calc(var(--seed, 0) * -.5s); }
+.foil .m.oil { background: var(--fx-oil, linear-gradient(#000 0 0)) center / cover no-repeat; animation: fxHue 14s linear infinite; animation-delay: calc(var(--seed, 0) * -.6s); }
 .foil .m.art { background: var(--art) center / 100% 100% no-repeat; filter: grayscale(1) contrast(1.8) brightness(1.05); mix-blend-mode: multiply; }
 .foil .m.ink { background: #808080; }
 .foil .m.dim { background: #000; }

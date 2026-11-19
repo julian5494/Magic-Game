@@ -19,8 +19,9 @@ export function ensureFoilTextures(): void {
       }
     }
   };
-  const idle = (window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback;
-  if (idle) idle(run);
+  // The 3D table keeps the page busy every frame, so don't wait for idle time forever.
+  const idle = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  if (idle) idle(run, { timeout: 400 });
   else setTimeout(run, 0);
 }
 
