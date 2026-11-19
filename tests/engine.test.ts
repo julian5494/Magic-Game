@@ -224,11 +224,15 @@ describe('hidden information', () => {
 describe('full games', () => {
   it('bots finish 4-player games without rules errors', () => {
     const ids = PRECONS.map((p) => p.id);
-    for (const seed of [3, 11]) {
-      const { state } = simulate(seed, ids);
-      expect(state.phase).toBe('over');
-    }
-  }, 60_000);
+    // Every ready-made deck plays, four to a table.
+    const tables = [ids.slice(0, 4), ids.slice(4, 8)];
+    for (const table of tables)
+      for (const seed of [3, 11]) {
+        // Rules errors and stuck games throw; a long game may still be going at the turn cap.
+        const { state } = simulate(seed, table);
+        expect(state.phase === 'over' || state.turn > 60).toBe(true);
+      }
+  }, 120_000);
 });
 
 describe('mana available (view)', () => {

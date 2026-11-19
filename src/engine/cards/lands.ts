@@ -54,6 +54,10 @@ export const LANDS: CardDef[] = [
   temple('Temple of Epiphany', 'U', 'R'),
   temple('Temple of Malady', 'B', 'G'),
   temple('Temple of Triumph', 'R', 'W'),
+  temple('Temple of Malice', 'B', 'R'),
+  temple('Temple of Mystery', 'G', 'U'),
+  temple('Temple of Enlightenment', 'W', 'U'),
+  temple('Temple of Silence', 'W', 'B'),
   land('Reliquary Tower', ['C'], { text: 'You have no maximum hand size.\n{T}: Add {C}.', statics: [{ kind: 'noMaxHandSize' }] }),
   land("Rogue's Passage", ['C'], {
     text: "{T}: Add {C}.\n{4}, {T}: Target creature can't be blocked this turn.",
