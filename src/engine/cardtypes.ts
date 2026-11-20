@@ -134,6 +134,8 @@ export interface Ctx {
   winGame(player: PlayerId): void;
   /** Continue in def.handlers[key] once every pending choice has been made. */
   defer(key: string): void;
+  /** Phase permanents out (with anything attached to them). */
+  phaseOut(ids: CardId[]): void;
   /** Run def.handlers[key] later: at the next end step, or the beginning of your next main phase / upkeep. */
   delay(when: 'nextEnd' | 'yourNextMain' | 'yourNextUpkeep', key: string, data?: any): void;
 }
@@ -162,9 +164,15 @@ export interface Cost {
   loyalty?: number;
   /** "−X": remove X loyalty counters (X chosen when activating). */
   loyaltyX?: boolean;
+  /** "Discard this card": an ability used from your hand (channel). */
+  discardSelf?: boolean;
+  /** "Remove five fuse counters from this": counters removed as a cost. */
+  removeCounters?: { kind: string; n: number };
 }
 
 export interface ActivatedAbility {
+  /** "This ability costs {1} less to activate for each ...": generic mana taken off. */
+  costReduce?: (state: GameState, controller: PlayerId) => number;
   /** Class level this ability needs. */
   level?: number;
   text: string;
@@ -225,6 +233,8 @@ export type TriggerOn =
   | 'anyEtb' // any permanent enters (use `condition` to narrow)
   | 'anyDies' // any creature dies (use `condition` to narrow)
   | 'youWinFlip'
+  | 'anyCreatureAttacks' // any creature attacks
+  | 'yourFirstMain' // at the beginning of your precombat (first) main phase
   | 'chapter' // a lore counter was put on this Saga (use `condition` for the chapter)
   | 'levelUp' // this Class gained a level (use `condition` for the level)
   | 'youSacrifice' // you sacrifice a permanent (use `condition` to narrow)
@@ -269,6 +279,10 @@ type StaticAbilityBase =
       loseKeywords?: Keyword[];
       /** "As long as equipped creature is legendary, ...". */
       condition?: (state: GameState, card: CardInstance) => boolean;
+      /** "Equipped creature has base power and toughness X/X" (Aettir and Priwen, Super State). */
+      basePT?: (state: GameState, src: CardInstance) => { power: number; toughness: number };
+      /** Commander's Plate: protection from each color not in your commander's color identity. */
+      proNotIdentity?: boolean;
     }
   /** Equip costs change: Puresteel Paladin ({0} with metalcraft), Bruenor (first each turn {0}), "cost {2} less". */
   | { kind: 'equipCost'; set?: number; reduce?: number; when?: 'metalcraft' | 'firstEachTurn' }
@@ -276,6 +290,10 @@ type StaticAbilityBase =
   | { kind: 'oppsNoCastYourTurn'; whileAttached?: boolean }
   /** "The legend rule doesn't apply to permanents you control." */
   | { kind: 'noLegendRule' }
+  /** "During your turn, this has flying", "has haste as long as an opponent controls a planeswalker". */
+  | { kind: 'selfKeywords'; keywords: Keyword[]; condition: (state: GameState, self: CardInstance) => boolean }
+  /** Teferi's Ageless Insight: draws other than the first in your draw step are doubled. */
+  | { kind: 'drawDouble' }
   /** Armiger Unleashed: during your turn, equip at instant speed. */
   | { kind: 'equipInstant' }
   /** Ragost: your artifacts are also Foods and have the Food ability. */

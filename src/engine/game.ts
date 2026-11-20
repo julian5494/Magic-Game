@@ -74,6 +74,11 @@ function mergedCopyDef(copied: string, copier: string): string {
 export function abilityMana(state: GameState, pid: PlayerId, ab: ActivatedAbility, x = 0): string | undefined {
   let cost = ab.cost.mana;
   if (cost && /\{X\}/i.test(cost)) cost = cost.replace(/\{X\}/gi, x > 0 ? `{${x}}` : '') || undefined;
+  if (cost && ab.costReduce) {
+    const less = ab.costReduce(state, pid);
+    const g = Number(cost.match(/^\{(\d+)\}/)?.[1] ?? 0);
+    cost = (Math.max(0, g - less) ? `{${Math.max(0, g - less)}}` : '') + cost.replace(/^\{\d+\}/, '') || undefined;
+  }
   if (!cost || !ab.equip) return cost;
   let generic = Number(cost.match(/^\{(\d+)\}/)?.[1] ?? 0);
   const colored = cost.replace(/^\{\d+\}/, '');
@@ -123,6 +128,7 @@ function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, i
   const sym = color && colors.includes(color) ? color : colors[0];
   markUsed(state, c, ab, index);
   const mult = manaMultiplier(state, c);
+  if ((defOf(c).subtypes ?? []).includes('Treasure')) getPlayer(state, pid).treasureMana = true;
   if (ab.cost.tap) tapPermanent(state, c);
   if (ab.cost.sacrificeSelf) moveCard(state, c.id, 'graveyard', { sacrifice: true });
   const pool = getPlayer(state, pid).manaPool;
@@ -212,6 +218,8 @@ export const HAND_ABILITY = 1000;
 
 function spellCost(state: GameState, card: CardInstance, x: number, variant?: CastVariant, pid: PlayerId = card.owner): ManaCost {
   const def = defOf(card);
+  // Yusri: after winning five flips, spells from your hand are free this turn.
+  if (card.zone === 'hand' && !variant?.extraCost && getPlayer(state, pid).freeCastTurn === state.turn) return parseCost('{0}');
   const c = parseCost(variant?.cost ?? def.cost);
   if (variant?.extraCost) {
     const e = parseCost(variant.extraCost);
@@ -385,7 +393,8 @@ function allLegalActions(state: GameState, pid: PlayerId): PlayableAction[] {
         if (helps) out.push({ ...a, label: `${a.label} (${def.costHelp!.join('/')} first)`, helpFirst: true });
       };
       if (def.modes && !v?.effect) {
-        const counts = [def.modeCount ?? 1];
+        // modeCount -1: "choose one or more" (any non-empty set of modes).
+        const counts = def.modeCount === -1 ? def.modes!.map((_, i) => i + 1) : [def.modeCount ?? 1];
         if (def.modeCountWithCommander && battlefieldCards(state).some((c) => c.controller === pid && c.commander)) counts.push(def.modeCountWithCommander);
         for (const combo of counts.flatMap((k) => modeCombos(def.modes!.length, k))) {
           const targets = specViews(state, combo.flatMap((m) => def.modes![m].targets), pid, id);
@@ -464,6 +473,7 @@ function abilityAction(
     if (ab.cost.loyalty < 0 && (card.counters.loyalty ?? 0) < -ab.cost.loyalty) return null;
   }
   if (ab.cost.life && getPlayer(state, pid).life < ab.cost.life) return null;
+  if (ab.cost.removeCounters && (card.counters[ab.cost.removeCounters.kind] ?? 0) < ab.cost.removeCounters.n) return null;
   let sacrificeOptions: CardId[] | undefined;
   if (ab.cost.sacrifice) {
     sacrificeOptions = battlefieldCards(state)
@@ -608,7 +618,9 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       }
     }
     if (fromCommand) p.commanderCasts[card.id] = (p.commanderCasts[card.id] ?? 0) + 1;
+    const castFrom = card.zone;
     moveCard(state, card.id, 'stack', { controller: pid });
+    card.castFrom = castFrom;
     card.x = x;
     state.stack.push({
       id: newId(state, 's'),
@@ -626,7 +638,8 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     log(state, `${p.name} casts ${def.name}${a.modes ? ` (${a.label.replace(/^Cast [^:]+: /, '')})` : ''}${x ? ` (X=${x})` : ''}${describeTargets(state, targets)}.`);
     p.spellsCast = (p.spellsCast ?? 0) + 1;
     if (!def.types.includes('Creature')) p.noncreatureCast = (p.noncreatureCast ?? 0) + 1;
-    pushEvent(state, { t: 'cast', card: card.id, controller: pid, def: def.name, nth: p.spellsCast, nthNoncreature: def.types.includes('Creature') ? undefined : p.noncreatureCast });
+    pushEvent(state, { t: 'cast', card: card.id, controller: pid, def: def.name, nth: p.spellsCast, nthNoncreature: def.types.includes('Creature') ? undefined : p.noncreatureCast, treasure: !!p.treasureMana });
+    p.treasureMana = false;
     const before = state.spellsThisTurn ?? 0;
     state.spellsThisTurn = before + 1;
     const top = state.stack[state.stack.length - 1];
@@ -648,7 +661,8 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     if (action.ability >= HAND_ABILITY && action.ability < GRANTED_BASE) {
       const hab = def.handAbilities![action.ability - HAND_ABILITY];
       const targets = validateTargets(a.targets, action.targets);
-      if (hab.cost.mana) pay(state, pid, parseCost(hab.cost.mana), []);
+      const handCost = abilityMana(state, pid, hab);
+      if (handCost) pay(state, pid, parseCost(handCost), []);
       log(state, `${p.name} discards ${def.name}: ${hab.text}.`);
       const snap = snapshot(state, card);
       moveCard(state, card.id, 'graveyard');
@@ -671,11 +685,13 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     const inc = card.inc;
     const sourceSnap = snapshot(state, card);
     const mult = manaMultiplier(state, card);
+    if (ab.mana && (defOf(card).subtypes ?? []).includes('Treasure')) p.treasureMana = true;
     const manaCost = abilityMana(state, pid, ab, x);
     if (manaCost) pay(state, pid, parseCost(manaCost), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
     if (ab.equip) p.equipTurn = state.turn;
     if (ab.cost.tap) tapPermanent(state, card);
     if (ab.cost.life) loseLife(state, pid, ab.cost.life);
+    if (ab.cost.removeCounters) card.counters[ab.cost.removeCounters.kind] -= ab.cost.removeCounters.n;
     if (ab.cost.sacrifice) {
       const sc = state.cards[action.sacrifice!];
       sacrificed = snapshot(state, sc);

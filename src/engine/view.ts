@@ -238,7 +238,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     priority: state.priority,
     players,
     hand: me ? [...me.hand] : [],
-    battlefield: [...state.battlefield],
+    battlefield: state.battlefield.filter((id) => !state.cards[id]?.phasedOut),
     stack: state.stack.map((s) => ({
       id: s.id,
       kind: s.kind,

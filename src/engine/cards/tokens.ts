@@ -32,6 +32,7 @@ export const TOKENS: CardDef[] = [
   token('Zombie Token', ['B'], ['Zombie'], 2, 2),
   token('Phyrexian Germ Token', ['B'], ['Phyrexian', 'Germ'], 0, 0),
   token('Rebel Token', ['R'], ['Rebel'], 2, 2),
+  { ...token('Servo Token', [], ['Servo'], 1, 1), types: ['Artifact', 'Creature'] },
   token('Insect Token', ['B', 'G'], ['Insect'], 1, 1),
   token('Faerie Rogue Token', ['B'], ['Faerie', 'Rogue'], 1, 1, { keywords: ['Flying'], text: 'Flying' }),
   {
@@ -51,6 +52,35 @@ export const TOKENS: CardDef[] = [
     token: true,
     text: '{2}, {T}, Sacrifice this artifact: You gain 3 life.',
     abilities: [{ text: '{2}, {T}, Sacrifice: Gain 3 life.', cost: { mana: '{2}', tap: true, sacrificeSelf: true }, effect: (ctx) => ctx.gainLife(ctx.controller, 3), aiValue: 1 }],
+  },
+  {
+    name: 'Blood Token',
+    types: ['Artifact'],
+    subtypes: ['Blood'],
+    colors: [],
+    token: true,
+    text: '{1}, {T}, Discard a card, Sacrifice this artifact: Draw a card.',
+    abilities: [
+      {
+        text: '{1}, {T}, Discard a card, Sacrifice: Draw a card.',
+        cost: { mana: '{1}', tap: true, sacrificeSelf: true },
+        condition: (s, c) => (s.players.find((p) => p.id === c.controller)?.hand.length ?? 0) > 0,
+        effect: (ctx) => {
+          ctx.discard(ctx.controller, 1);
+          ctx.defer('draw');
+        },
+        aiValue: 0,
+      },
+    ],
+    handlers: { draw: (ctx) => ctx.draw(ctx.controller, 1) },
+  },
+  {
+    name: 'Munitions Token',
+    types: ['Artifact'],
+    colors: [],
+    token: true,
+    text: 'When this token leaves the battlefield, it deals 2 damage to any target.',
+    triggers: [{ on: 'leaves', text: 'When this token leaves the battlefield, it deals 2 damage to any target.', targets: [{ kind: 'any', label: 'any target' }], effect: (ctx) => ctx.damage(ctx.targets[0], 2) }],
   },
   {
     name: 'Treasure Token',

@@ -132,7 +132,7 @@ export function staticsOf(state: GameState, pid: PlayerId): StaticAbility[] {
 }
 
 export function battlefieldCards(state: GameState): CardInstance[] {
-  return state.battlefield.map((id) => state.cards[id]).filter(Boolean);
+  return state.battlefield.map((id) => state.cards[id]).filter((c) => c && !c.phasedOut);
 }
 
 /** Permanents attached to `card` (auras and equipment). */
@@ -162,6 +162,10 @@ function staticMods(state: GameState, card: CardInstance) {
         toughness += (st.toughness ?? 0) * k;
         if (st.keywords) keywords.push(...st.keywords);
         if (st.loseKeywords) lost.push(...st.loseKeywords);
+        if (st.proNotIdentity) {
+          const ident = commanderIdentity(state, src.controller);
+          for (const c of COLORS) if (!ident.includes(c)) keywords.push(`Pro${c}` as Keyword);
+        }
         if (st.cantAttackOrBlock) cantAttackOrBlock = true;
       }
     }
@@ -173,6 +177,15 @@ export function getPT(state: GameState, card: CardInstance): { power: number; to
   const def = defOf(card);
   let power = card.temp.animate?.power ?? def.power ?? 0;
   let toughness = card.temp.animate?.toughness ?? def.toughness ?? 0;
+  // "Equipped/enchanted creature has base power and toughness ...".
+  if (card.zone === 'battlefield') {
+    for (const src of battlefieldCards(state)) {
+      if (src.attachedTo !== card.id) continue;
+      for (const st of cardStatics(src)) {
+        if (st.kind === 'attached' && st.basePT) ({ power, toughness } = st.basePT(state, src));
+      }
+    }
+  }
   if (def.dynamicPT) {
     const d = def.dynamicPT(state, card);
     power += d.power;
@@ -191,6 +204,8 @@ export function getKeywords(state: GameState, card: CardInstance): Keyword[] {
   const mods = staticMods(state, card);
   const set = new Set<Keyword>([...(def.keywords ?? []), ...card.temp.keywords, ...mods.keywords]);
   for (const k of mods.lost) set.delete(k);
+  for (const k of card.temp.loseKeywords ?? []) set.delete(k);
+  if (card.zone === 'battlefield') for (const st of cardStatics(card)) if (st.kind === 'selfKeywords' && st.condition(state, card)) st.keywords.forEach((k) => set.add(k));
   if (card.dashed) set.add('Haste');
   return [...set];
 }

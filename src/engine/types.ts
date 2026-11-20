@@ -88,6 +88,8 @@ export interface CardInstance {
     toughness: number;
     keywords: Keyword[];
     cantBlock?: boolean;
+    /** Keywords it loses until end of turn (Shadowspear). */
+    loseKeywords?: Keyword[];
     /** Until end of turn it's also a creature with this base P/T and these creature types (Vihaan's Treasures). */
     animate?: { power: number; toughness: number; subtypes?: string[] };
   };
@@ -112,6 +114,12 @@ export interface CardInstance {
   dashed?: boolean;
   /** Front-face definition while this card is showing its back face or copying something. */
   frontDef?: string;
+  /** Phased out: treated as though it doesn't exist until its controller's next untap step. */
+  phasedOut?: boolean;
+  /** The zone this spell was cast from ("if this spell was cast from a graveyard"). */
+  castFrom?: ZoneName;
+  /** "The next time this would deal damage this turn": double it (2) or prevent it (0). */
+  dmgMod?: { mult: number; turn: number; combatOnly?: boolean }[];
   /** A copy that isn't legendary (Spark Double). */
   copyNotLegendary?: boolean;
   /** May be played from exile by this player until the end of this turn number (impulse draw). */
@@ -158,9 +166,16 @@ export interface Player {
   /** Turn of this player's last coin flip (Edgar: the first flips each turn win). */
   flipTurn?: number;
   lifeGainedThisTurn: number;
+  /** Cards drawn this turn, and whether the draw step's first draw happened. */
+  drawsThisTurn?: number;
+  drawStepDrawTurn?: number;
+  /** Mana from a Treasure is in the pool waiting to be spent (Alchemist's Talent). */
+  treasureMana?: boolean;
   /** Spells this player cast this turn (all, and noncreature). */
   spellsCast?: number;
   noncreatureCast?: number;
+  /** Turn in which this player may cast spells from hand without paying their mana costs (Yusri). */
+  freeCastTurn?: number;
   /** Turn this player last activated an equip ability (Bruenor: the first each turn is free). */
   equipTurn?: number;
   /** Turn this player last created a token. */
@@ -218,12 +233,12 @@ export type GameEvent =
   | { t: 'etb'; card: CardId; controller: PlayerId }
   | { t: 'leaves'; card: CardId; snap: Snapshot; to: ZoneName; /** Set when it was sacrificed (by this player). */ sac?: PlayerId }
   | { t: 'attacks'; card: CardId; defender: PlayerId; alone: boolean }
-  | { t: 'cast'; card: CardId; controller: PlayerId; def: string; /** This player's Nth spell this turn, and Nth noncreature spell. */ nth?: number; nthNoncreature?: number }
+  | { t: 'cast'; card: CardId; controller: PlayerId; def: string; /** This player's Nth spell this turn, and Nth noncreature spell. */ nth?: number; nthNoncreature?: number; /** Mana from a Treasure was spent on it. */ treasure?: boolean }
   | { t: 'gainLife'; player: PlayerId; amount: number }
   | { t: 'combatDamagePlayer'; source: CardId; player: PlayerId; amount: number }
   | { t: 'step'; step: Step; active: PlayerId }
   | { t: 'tapped'; card: CardId }
-  | { t: 'draw'; player: PlayerId }
+  | { t: 'draw'; player: PlayerId; nth?: number }
   | { t: 'discard'; player: PlayerId; card: CardId }
   | { t: 'attackDeclared'; player: PlayerId; count: number }
   | { t: 'coinFlip'; player: PlayerId; won: boolean }

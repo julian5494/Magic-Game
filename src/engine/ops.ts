@@ -127,8 +127,18 @@ export function moveCard(
   card.evoked = false;
   card.dashed = false;
   card.copyNotLegendary = false;
+  card.phasedOut = false;
+  card.dmgMod = undefined;
+  if (to !== 'stack') card.castFrom = undefined;
   if (to !== 'stack') card.x = undefined;
-  if (from === 'battlefield') card.linked = [];
+  if (from === 'battlefield') {
+    // "Exile ... until this leaves the battlefield": the exiled cards return.
+    for (const lid of card.linked) {
+      const l = state.cards[lid];
+      if (l && l.zone === 'exile') moveCard(state, lid, 'battlefield', { controller: l.owner });
+    }
+    card.linked = [];
+  }
   card.controller = to === 'battlefield' || to === 'stack' ? opts.controller ?? card.owner : card.owner;
 
   if (to === 'battlefield') {
@@ -222,7 +232,8 @@ function logMove(state: GameState, card: CardInstance, from: ZoneName, to: ZoneN
 export function drawCards(state: GameState, pid: PlayerId, n: number): void {
   const p = getPlayer(state, pid);
   let drawn = 0;
-  for (let i = 0; i < n; i++) {
+  let bonus = 0;
+  for (let i = 0; i < n + bonus; i++) {
     if (p.library.length === 0) {
       if (controllerHasStatic(state, pid, 'emptyDrawWins')) {
         log(state, `${p.name} would draw from an empty library, and wins the game instead!`);
@@ -233,8 +244,14 @@ export function drawCards(state: GameState, pid: PlayerId, n: number): void {
       break;
     }
     moveCard(state, p.library[0], 'hand');
-    pushEvent(state, { t: 'draw', player: pid });
+    p.drawsThisTurn = (p.drawsThisTurn ?? 0) + 1;
+    pushEvent(state, { t: 'draw', player: pid, nth: p.drawsThisTurn });
     drawn++;
+    // Teferi's Ageless Insight: every draw but the first in your draw step is doubled.
+    const firstInDrawStep = state.step === 'draw' && state.activePlayer === pid && p.drawStepDrawTurn !== state.turn;
+    if (firstInDrawStep) p.drawStepDrawTurn = state.turn;
+    // (Only the original draws are replaced, not the extra ones.)
+    else if (i < n && controllerHasStatic(state, pid, 'drawDouble')) bonus++;
   }
   if (drawn && state.phase === 'playing') log(state, `${p.name} draws ${drawn} card${drawn > 1 ? 's' : ''}.`);
   if (p.drewFromEmpty) log(state, `${p.name} tried to draw from an empty library.`);
@@ -294,6 +311,16 @@ export function dealDamage(
   const t = normalizeTarget(state, target);
   if (!t) return;
   const live = state.cards[source.id];
+  // "The next time it would deal damage this turn, it deals double / prevent that damage."
+  const modIdx = live?.dmgMod?.findIndex((m) => m.turn === state.turn && (combat || !m.combatOnly)) ?? -1;
+  if (live?.dmgMod && modIdx >= 0) {
+    const [mod] = live.dmgMod.splice(modIdx, 1);
+    if (mod.mult === 0) {
+      log(state, `The damage from ${source.def} is prevented.`);
+      return;
+    }
+    amount *= mod.mult;
+  }
   const kws: Keyword[] = live && live.zone === 'battlefield' ? getKeywords(state, live) : defOf(source).keywords ?? [];
   const controller = live ? live.controller : source.controller;
   if (!combat) {
@@ -894,6 +921,15 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
     winGame(p) {
       log(state, `${getPlayer(state, p).name} wins the game!`);
       for (const q of state.players) if (q.id !== p && !q.lost) playerLosesRef(state, q.id, `${getPlayer(state, p).name} won the game`);
+    },
+    phaseOut(ids) {
+      for (const id of ids) {
+        const c = state.cards[id];
+        if (!c || c.zone !== 'battlefield' || c.phasedOut) continue;
+        for (const a of battlefieldCards(state).filter((x) => x.attachedTo === id)) a.phasedOut = true;
+        c.phasedOut = true;
+        log(state, `${c.def} phases out.`);
+      }
     },
     defer(key) {
       (state.continuations ??= []).push({ ctx: cardData, key });

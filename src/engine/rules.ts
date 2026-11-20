@@ -212,6 +212,12 @@ function eventMatches(
     case 'anyLeaves':
       ok = e.t === 'leaves';
       break;
+    case 'anyCreatureAttacks':
+      ok = e.t === 'attacks';
+      break;
+    case 'yourFirstMain':
+      ok = e.t === 'step' && e.step === 'main1' && e.active === self.controller;
+      break;
     case 'chapter':
       ok = e.t === 'lore' && e.card === self.id;
       break;
@@ -589,6 +595,7 @@ export function startTurn(state: GameState, pid: PlayerId): void {
     state.extraCombats = undefined;
     p.lifeGainedThisTurn = 0;
     p.spellsCast = 0;
+    p.drawsThisTurn = 0;
     p.noncreatureCast = 0;
     if (p.passUntilTurn !== null && p.passUntilTurn < state.turn) p.passUntilTurn = null;
   }
@@ -645,11 +652,22 @@ function enterStep(state: GameState, step: Step): void {
   state.step = step;
   state.priority = null;
   state.passes = [];
-  for (const p of state.players) p.manaPool = emptyPool();
+  for (const p of state.players) {
+    p.manaPool = emptyPool();
+    p.treasureMana = false;
+  }
   runDelayed(state, step);
   const ap = state.activePlayer;
   switch (step) {
     case 'untap':
+      // Phasing: your phased-out permanents phase back in.
+      for (const id of state.battlefield) {
+        const c = state.cards[id];
+        if (c?.phasedOut && c.controller === ap) {
+          c.phasedOut = false;
+          log(state, `${c.def} phases in.`);
+        }
+      }
       for (const c of battlefieldCards(state)) {
         if (c.controller !== ap) continue;
         c.sick = false;
@@ -690,6 +708,7 @@ function enterStep(state: GameState, step: Step): void {
       if (state.sagaTurn !== state.turn) {
         state.sagaTurn = state.turn;
         for (const c of battlefieldCards(state)) if (c.controller === ap && defOf(c).sagaChapters) addLore(state, c);
+        pushEvent(state, { t: 'step', step, active: ap });
       }
       state.priority = ap;
       return;
