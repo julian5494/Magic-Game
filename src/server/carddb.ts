@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import type { CardDef } from '../engine/cardtypes';
 import { convertScryfall, type ScryCard } from '../engine/oracle';
 import { findDef, normalizeName, registerAlias, registerGenerated } from '../engine/registry';
-import { bulkCard } from './bulk';
+import { bulkCard, realName } from './bulk';
 
 const CACHE_FILE = resolve(process.env.CARD_CACHE ?? '.cache/scryfall-cards.json');
 const HEADERS = { 'User-Agent': 'CommanderArena/0.1', Accept: 'application/json', 'Content-Type': 'application/json' };
@@ -132,7 +132,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
   const pending: CardRequest[] = [];
   const keyOf = (r: CardRequest) => (r.set && r.cn ? `${r.set.toLowerCase()}:${r.cn}` : undefined);
   const nameMatches = (r: CardRequest, s: ScryCard) =>
-    [s.name, ...(s.card_faces ?? []).map((f) => f.name)].some((n) => normalizeName(n) === normalizeName(r.name));
+    [s.name, ...(s.card_faces ?? []).map((f) => f.name)].some((n) => normalizeName(n) === normalizeName(r.name) || normalizeName(n) === normalizeName(realName(r.name)));
   /** The cached printing for a request, only if it really is that card. */
   const printingOf = (r: CardRequest) => {
     const p = keyOf(r) ? cache.get(keyOf(r)!) : undefined;
@@ -147,14 +147,14 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
     if (seen.has(k)) continue;
     seen.add(k);
     const printing = printingOf(r);
-    const byName = cache.get(normalizeName(r.name)) ?? bulkCard(r.name);
+    const byName = cache.get(normalizeName(r.name)) ?? cache.get(normalizeName(realName(r.name))) ?? bulkCard(r.name);
     if (!stale(r) && (printing || (byName && (!keyOf(r) || cache.has(keyOf(r)!))))) continue;
     pending.push(r);
   }
 
   for (let i = 0; i < pending.length; i += 75) {
     const chunk = pending.slice(i, i + 75);
-    const ids = chunk.map((r) => (r.set && r.cn ? { set: r.set.toLowerCase(), collector_number: r.cn } : { name: r.name }));
+    const ids = chunk.map((r) => (r.set && r.cn ? { set: r.set.toLowerCase(), collector_number: r.cn } : { name: realName(r.name) }));
     let res: { data: any[]; not_found: any[] };
     try {
       res = await postCollection(ids);
@@ -183,7 +183,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
     // Retry misses by name (bad set codes, split-card names, typos).
     for (const miss of res.not_found) {
       const req = chunk.find((r) =>
-        miss.name ? normalizeName(r.name) === normalizeName(miss.name) : r.set?.toLowerCase() === miss.set && r.cn === miss.collector_number,
+        miss.name ? normalizeName(realName(r.name)) === normalizeName(miss.name) : r.set?.toLowerCase() === miss.set && r.cn === miss.collector_number,
       );
       if (!req || cache.has(normalizeName(req.name)) || bulkCard(req.name)) continue;
       await sleep(100);
@@ -200,7 +200,7 @@ export async function loadCards(requests: CardRequest[]): Promise<{ found: Map<s
 
   for (const r of requests) {
     const printing = printingOf(r);
-    const card = printing ?? cache.get(normalizeName(r.name)) ?? bulkCard(r.name);
+    const card = printing ?? cache.get(normalizeName(r.name)) ?? cache.get(normalizeName(realName(r.name))) ?? bulkCard(r.name);
     if (!card) {
       if (!notFound.includes(r.name)) notFound.push(r.name);
       continue;

@@ -8,6 +8,13 @@ import { pipeline } from 'node:stream/promises';
 import { createGunzip, createGzip } from 'node:zlib';
 import type { ScryCard } from '../engine/oracle';
 import { normalizeName } from '../engine/registry';
+import FLAVOR_NAMES from './flavor-names.json';
+
+/** Crossover printings sold under another name ("Balamb Garden" is Command Beacon): the card's real name. */
+const flavorIndex = new Map(Object.entries(FLAVOR_NAMES as Record<string, string>).map(([k, v]) => [normalizeName(k), v]));
+export function realName(name: string): string {
+  return flavorIndex.get(normalizeName(name)) ?? name;
+}
 
 export const BULK_FILE = resolve(process.env.BULK_FILE ?? '.cache/oracle-cards.jsonl.gz');
 const MAX_AGE_MS = 7 * 24 * 3600_000;
@@ -138,7 +145,7 @@ export function loadBulk(opts: { download?: boolean } = {}): Promise<number> {
 }
 
 export function bulkCard(name: string): BulkCard | undefined {
-  return byName.get(normalizeName(name));
+  return byName.get(normalizeName(name)) ?? byName.get(normalizeName(realName(name)));
 }
 
 export function bulkCards(): BulkCard[] {
