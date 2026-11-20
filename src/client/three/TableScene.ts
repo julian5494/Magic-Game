@@ -10,7 +10,6 @@ import { CSS3DObject, CSS3DRenderer } from 'three/examples/jsm/renderers/CSS3DRe
 import * as Mo from './models';
 import { leatherGrainDataUrl } from './textures';
 
-export type Quality = 'high' | 'low';
 export type PropSet = 'candle' | 'lantern';
 
 /** Size of the HTML board in CSS pixels; 10 px = 1 cm on the table. */
@@ -62,7 +61,6 @@ export class TableScene {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(FOV, 1, 1, 1500);
   private composer: EffectComposer | null = null;
-  private quality: Quality;
   private calm = false;
   private M!: Mo.Mats;
   private props: Record<string, THREE.Object3D> = {};
@@ -77,7 +75,6 @@ export class TableScene {
   private dirty = true;
   private disposed = false;
   private insets: Insets = { top: 70, bottom: 94, left: 40, right: 80 };
-  private frameNo = 0;
   /** Called with the screen positions of the dice (for click/drop areas) whenever they move on screen. */
   onLayout: ((anchors: Anchors) => void) | null = null;
   private oppDie: Mo.D20 | null = null;
@@ -92,11 +89,10 @@ export class TableScene {
   private mouse = new THREE.Vector2();
   private sway = new THREE.Vector2();
 
-  constructor(container: HTMLElement, boardEl: HTMLElement, quality: Quality) {
+  constructor(container: HTMLElement, boardEl: HTMLElement) {
     this.container = container;
-    this.quality = quality;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(quality === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
@@ -128,7 +124,7 @@ export class TableScene {
     key.position.set(-14, 175, 52);
     key.target.position.set(0, 0, 0);
     key.castShadow = true;
-    key.shadow.mapSize.set(this.quality === 'high' ? 2048 : 1024, this.quality === 'high' ? 2048 : 1024);
+    key.shadow.mapSize.set(2048, 2048);
     key.shadow.bias = -0.0004;
     key.shadow.normalBias = 0.03;
     key.shadow.camera.near = 60;
@@ -224,7 +220,6 @@ export class TableScene {
 
   private setupPost(): void {
     this.composer = null;
-    if (this.quality !== 'high') return;
     const composer = new EffectComposer(this.renderer);
     composer.addPass(new RenderPass(this.scene, this.camera));
     composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.6, 0.97));
@@ -543,12 +538,10 @@ export class TableScene {
     if (document.hidden) return;
     const dt = Math.min(0.1, this.clock.getDelta());
     const t = this.clock.elapsedTime;
-    this.frameNo++;
     const dieMoving = (this.myDie?.tick(dt) ?? false) || (this.oppDie?.tick(dt) ?? false);
     const camMoved = this.moveCamera(t, dt);
     if (this.calm && !this.dirty && !dieMoving && !camMoved) return;
-    // Lights flicker; the low setting redraws at half rate.
-    if (this.quality === 'low' && !this.dirty && !dieMoving && !camMoved && this.frameNo % 2) return;
+    // Lights flicker.
     if (!this.calm) {
       for (const f of [...this.flickers, this.propFlicker[this.propSet]]) {
         const n = Math.sin(t * 17 + f.base) * 0.5 + Math.sin(t * 29 + 1.3) * 0.3 + Math.sin(t * 7.3) * 0.2;

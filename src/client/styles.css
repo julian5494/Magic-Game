@@ -916,8 +916,6 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 /* The big preview leans toward the pointer while you hover a foil card. */
 .preview-img { transform: perspective(900px) rotateY(calc((var(--mx, .5) - .5) * 14deg)) rotateX(calc((.5 - var(--my, .5)) * 10deg)); transition: transform .25s ease-out; }
 .calm .foil .m, .calm .foil .fx { animation-play-state: paused; }
-/* On the low graphics setting, foils on the table hold still (the big preview still shimmers). */
-.tavern.q-low .foil .m, .tavern.q-low .foil .fx { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .foil .m, .foil .fx { animation-play-state: paused; } }
 .preview-look { font: 700 12px Cinzel, Georgia, serif; letter-spacing: .5px; color: #ffd98a; text-shadow: 0 0 8px #ffb34766; }
 

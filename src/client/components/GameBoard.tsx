@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import type { Anchors } from '../three/TableScene';
-import { useTable3D, useTableSettings, type Quality3D } from '../three/useTable3D';
+import { useTable3D, useTableSettings } from '../three/useTable3D';
 import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, Step, Target, TargetSpecView } from '../../engine/types';
 import type { CardView, GameView, PlayerView, StackView } from '../../engine/view';
 import type { ClientMessage } from '../../shared/protocol';
@@ -139,7 +139,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const [calm, setCalm] = useState(() => readFlag(CALM_KEY));
   const table = useTableSettings();
   const tableRef = useRef<HTMLDivElement>(null);
-  const { scene: table3d, boardEl } = useTable3D(tableRef, table.quality);
+  const { scene: table3d, boardEl } = useTable3D(tableRef);
   const [anchors, setAnchors] = useState<Anchors>({});
   const dieAt = table3d ? anchors.me ?? null : null;
   const [mats, setMat] = useMats();
@@ -896,7 +896,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 
   return (
-    <div className={`tavern q-${table.quality} ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
+    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
       <div className="table3d" ref={tableRef} />
       {table3d ? createPortal(planeEl, boardEl) : <div className="stage">{planeEl}</div>}
 
@@ -1102,15 +1102,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               />{' '}
               Reduce effects
             </label>
-            <label>
-              3D table{' '}
-              <select value={table.quality} onChange={(e) => table.setQuality(e.target.value as Quality3D)}>
-                <option value="high">High</option>
-                <option value="low">Low (faster)</option>
-                <option value="off">Off (flat table)</option>
-              </select>
-            </label>
-            {table.quality !== 'off' && (
+            {table3d && (
               <label>
                 Table props{' '}
                 <select value={table.propSet} onChange={(e) => table.setPropSet(e.target.value as 'candle' | 'lantern')}>

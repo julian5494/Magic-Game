@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState, type RefObject } from 'react';
-import type { PropSet, Quality, TableScene } from './TableScene';
+import type { PropSet, TableScene } from './TableScene';
 
-export type Quality3D = Quality | 'off';
-const QUALITY_KEY = 'commander-arena-3d';
 const PROPS_KEY = 'commander-arena-props';
+
+/**
+ * The table is always the full-quality 3D tavern. It falls back to the flat table only when the browser
+ * can't do WebGL; `?flat=1` in the address also forces it (for automated tests on machines without a GPU).
+ */
+const forceFlat = () => {
+  try {
+    return new URLSearchParams(location.search).has('flat');
+  } catch {
+    return false;
+  }
+};
 
 function read<T extends string>(key: string, allowed: T[], fallback: T): T {
   try {
@@ -21,17 +31,11 @@ function write(key: string, v: string) {
   }
 }
 
-/** The 3D quality and prop set, remembered in this browser. */
+/** The table's prop set, remembered in this browser. */
 export function useTableSettings() {
-  const [quality, setQ] = useState<Quality3D>(() => read<Quality3D>(QUALITY_KEY, ['high', 'low', 'off'], 'high'));
   const [propSet, setP] = useState<PropSet>(() => read<PropSet>(PROPS_KEY, ['candle', 'lantern'], 'candle'));
   return {
-    quality,
     propSet,
-    setQuality: (q: Quality3D) => {
-      setQ(q);
-      write(QUALITY_KEY, q);
-    },
     setPropSet: (p: PropSet) => {
       setP(p);
       write(PROPS_KEY, p);
@@ -41,9 +45,9 @@ export function useTableSettings() {
 
 /**
  * Load and run the 3D tavern behind the board. Returns the scene once it is ready (null while loading,
- * when 3D is off, or when the browser has no WebGL), plus the element the board should be rendered into.
+ * or when the browser has no WebGL), plus the element the board should be rendered into.
  */
-export function useTable3D(container: RefObject<HTMLDivElement>, quality: Quality3D) {
+export function useTable3D(container: RefObject<HTMLDivElement>) {
   const boardEl = useMemo(() => {
     const el = document.createElement('div');
     el.className = 'board3d';
@@ -52,7 +56,7 @@ export function useTable3D(container: RefObject<HTMLDivElement>, quality: Qualit
   const [scene, setScene] = useState<TableScene | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    if (quality === 'off' || !container.current) return;
+    if (forceFlat() || !container.current) return;
     let alive = true;
     let s: TableScene | null = null;
     (async () => {
@@ -63,7 +67,7 @@ export function useTable3D(container: RefObject<HTMLDivElement>, quality: Qualit
           setFailed(true);
           return;
         }
-        s = new mod.TableScene(container.current, boardEl, quality);
+        s = new mod.TableScene(container.current, boardEl);
         await s.build();
         if (alive) setScene(s);
         else s.dispose();
@@ -79,6 +83,6 @@ export function useTable3D(container: RefObject<HTMLDivElement>, quality: Qualit
       s?.dispose();
       setScene(null);
     };
-  }, [quality, container, boardEl]);
+  }, [container, boardEl]);
   return { scene, boardEl, failed };
 }
