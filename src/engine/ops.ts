@@ -1,7 +1,7 @@
 import type { CardFilter, Ctx, TargetSpec } from './cardtypes';
 import { getDef } from './registry';
 import {
-  alivePlayers, battlefieldCards, cmc, commanderIdentity, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
+  alivePlayers, battlefieldCards, cardStatics, cmc, commanderIdentity, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
   hasType, log, matchesFilter, newId, opponentsOf, protectedFrom, defColors, snapshot,
 } from './state';
 import type {
@@ -173,6 +173,12 @@ export function moveCard(
         data: { card: id, inc: card.inc },
       }, true);
     } else pushEvent(state, { t: 'etb', card: id, controller: card.controller });
+    // Sagas enter with a lore counter; Classes start at level 1.
+    if (def.sagaChapters) {
+      card.counters.lore = 1;
+      pushEvent(state, { t: 'lore', card: id, n: 1 });
+    }
+    if ((def.subtypes ?? []).includes('Class')) card.counters.level = 1;
   } else if (to !== 'stack') {
     const arr = zoneArray(state, card, to)!;
     if (to === 'library') {
@@ -243,7 +249,7 @@ export function setPlayerLoses(f: typeof playerLosesRef): void {
 /** Flip a coin for a player (Krark's Thumb flips two and keeps a win; Edgar's first flips each turn win). */
 export function flipCoin(state: GameState, pid: PlayerId): boolean {
   const p = getPlayer(state, pid);
-  const mine = battlefieldCards(state).filter((c) => c.controller === pid).flatMap((c) => defOf(c).statics ?? []);
+  const mine = battlefieldCards(state).filter((c) => c.controller === pid).flatMap((c) => cardStatics(c));
   const firstThisTurn = p.flipTurn !== state.turn;
   p.flipTurn = state.turn;
   let won: boolean;
@@ -261,7 +267,7 @@ export function flipCoin(state: GameState, pid: PlayerId): boolean {
 export function gainLife(state: GameState, pid: PlayerId, n: number): void {
   if (n <= 0) return;
   // Life-doubling effects stack (each one doubles again).
-  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of defOf(c).statics ?? []) if (st.kind === 'lifeDouble') n *= 2;
+  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of cardStatics(c)) if (st.kind === 'lifeDouble') n *= 2;
   const p = getPlayer(state, pid);
   if (p.lost) return;
   p.life += n;
@@ -323,7 +329,7 @@ export function dealDamage(
     }
     if (!combat && c.id !== source.id && controllerHasStatic(state, c.controller, 'preventNoncombatDamageToOtherCreatures')) {
       const preventer = battlefieldCards(state).find(
-        (x) => x.controller === c.controller && (defOf(x).statics ?? []).some((s) => s.kind === 'preventNoncombatDamageToOtherCreatures'),
+        (x) => x.controller === c.controller && cardStatics(x).some((s) => s.kind === 'preventNoncombatDamageToOtherCreatures'),
       );
       if (preventer && preventer.id !== c.id) return;
     }
@@ -351,7 +357,7 @@ export function destroy(state: GameState, id: CardId): boolean {
 const ARTIFACT_TOKENS = ['Clue Token', 'Food Token', 'Treasure Token'];
 
 export function createToken(state: GameState, pid: PlayerId, defName: string, n = 1): CardInstance[] {
-  const statics = battlefieldCards(state).filter((c) => c.controller === pid).flatMap((c) => defOf(c).statics ?? []);
+  const statics = battlefieldCards(state).filter((c) => c.controller === pid).flatMap((c) => cardStatics(c));
   const has = (k: string) => statics.filter((st) => st.kind === k).length;
   // Replacement effects, in a fixed order: Academy Manufactor, then Xorn, then doublers.
   const batch: Record<string, number> = { [defName]: n };
@@ -380,7 +386,7 @@ export function createToken(state: GameState, pid: PlayerId, defName: string, n 
 /** How much one activation of a mana ability makes (Goldspan Dragon makes Treasures add two). */
 export function manaMultiplier(state: GameState, card: CardInstance): number {
   if (!(defOf(card).subtypes ?? []).includes('Treasure')) return 1;
-  return battlefieldCards(state).some((c) => c.controller === card.controller && (defOf(c).statics ?? []).some((st) => st.kind === 'treasureMana2')) ? 2 : 1;
+  return battlefieldCards(state).some((c) => c.controller === card.controller && cardStatics(c).some((st) => st.kind === 'treasureMana2')) ? 2 : 1;
 }
 
 export function tapPermanent(state: GameState, card: CardInstance): void {

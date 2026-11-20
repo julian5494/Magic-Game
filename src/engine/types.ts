@@ -227,7 +227,9 @@ export type GameEvent =
   | { t: 'discard'; player: PlayerId; card: CardId }
   | { t: 'attackDeclared'; player: PlayerId; count: number }
   | { t: 'coinFlip'; player: PlayerId; won: boolean }
-  | { t: 'targeted'; card: CardId; by: PlayerId; spell: boolean };
+  | { t: 'targeted'; card: CardId; by: PlayerId; spell: boolean }
+  | { t: 'lore'; card: CardId; n: number }
+  | { t: 'level'; card: CardId; n: number };
 
 export interface PendingTrigger {
   source: CardId;
@@ -349,6 +351,8 @@ export interface GameState {
   combatsThisTurn?: number;
   /** Delayed effects ("at the beginning of the next end step, ..."): a card handler to run then. */
   delayed?: { when: 'nextEnd' | 'yourNextMain' | 'yourNextUpkeep'; player: PlayerId; turn: number; ctx: any; key: string; extra?: any }[];
+  /** Turn Sagas last got their lore counter. */
+  sagaTurn?: number;
   /** Creatures that died this turn (Mahadi). */
   diedThisTurn?: number;
   /** Spells cast during the previous turn (werewolves). */

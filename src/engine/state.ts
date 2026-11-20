@@ -113,10 +113,21 @@ export function isLegendary(card: CardInstance): boolean {
   return !card.copyNotLegendary && (defOf(card).supertypes ?? []).includes('Legendary');
 }
 
+/** A Class's current level (1 for everything else). */
+export function levelOf(card: CardInstance | Snapshot): number {
+  return card.counters?.level ?? 1;
+}
+
+/** A permanent's static abilities that are active (Class abilities need their level). */
+export function cardStatics(card: CardInstance): StaticAbility[] {
+  const all = defOf(card).statics ?? [];
+  return all.some((st) => st.level) ? all.filter((st) => !st.level || levelOf(card) >= st.level) : all;
+}
+
 /** Static abilities of the permanents a player controls. */
 export function staticsOf(state: GameState, pid: PlayerId): StaticAbility[] {
   const out: StaticAbility[] = [];
-  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of defOf(c).statics ?? []) out.push(st);
+  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of cardStatics(c)) out.push(st);
   return out;
 }
 
@@ -137,9 +148,7 @@ function staticMods(state: GameState, card: CardInstance) {
   let cantAttackOrBlock = false;
   if (card.zone !== 'battlefield') return { power, toughness, keywords, lost, cantAttackOrBlock };
   for (const src of battlefieldCards(state)) {
-    const def = defOf(src);
-    if (!def.statics) continue;
-    for (const st of def.statics) {
+    for (const st of cardStatics(src)) {
       if (st.kind === 'anthem') {
         if (matchesFilter(state, card, st.filter, src.controller, src.id)) {
           const k = st.scale ? st.scale(state, src, card) : 1;
@@ -202,7 +211,7 @@ export function cantAttackOrBlock(state: GameState, card: CardInstance): boolean
 }
 
 export function controllerHasStatic(state: GameState, pid: PlayerId, kind: string): boolean {
-  return battlefieldCards(state).some((c) => c.controller === pid && (defOf(c).statics ?? []).some((s) => s.kind === kind));
+  return battlefieldCards(state).some((c) => c.controller === pid && cardStatics(c).some((s) => s.kind === kind));
 }
 
 export function snapshot(state: GameState, card: CardInstance): Snapshot {

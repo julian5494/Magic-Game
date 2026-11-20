@@ -420,6 +420,13 @@ function permanentsSubject(subject: string, bias: 'opponent' | 'self'): Piece & 
       },
     };
   }
+  // "Knights you control", "other Elves you control": creatures of a type.
+  const tribe = subject.match(/^(other )?([A-Z][a-z]+) you control$/);
+  if (tribe) {
+    const sub = singularSubtype(tribe[2]);
+    const other = !!tribe[1];
+    return { targets: [], run: () => {}, each: (ctx) => ctx.creatures({ controller: 'you', subtypes: [sub], other }).map((c) => c.id) };
+  }
   const all = l.match(/^(?:all|each) (.+)$/) ?? (/(creatures|permanents|artifacts|lands) (you control|your opponents control|you don't control)$/.test(l) ? [l, l] : null);
   if (all) {
     const o = parseObject(singularPhrase(all[1]));
@@ -1203,6 +1210,19 @@ const SENTENCES: SentenceParser[] = [
       },
     };
   },
+  (s) => {
+    const m = s.match(/^create that many (.+?) tokens?$/i);
+    const name = m && tokenDef(m[1], undefined);
+    if (!name) return null;
+    return {
+      targets: [],
+      run: (ctx) => {
+        const e = ctx.event;
+        const n = e && 'amount' in e ? e.amount : 0;
+        if (n > 0) ctx.createToken(ctx.controller, name, n);
+      },
+    };
+  },
   (s) => (/^investigate$/i.test(s) ? { targets: [], run: (ctx) => void ctx.createToken(ctx.controller, 'Clue Token') } : null),
   (s) =>
     /^put your commander into your hand from the command zone$/i.test(s)
@@ -1777,6 +1797,11 @@ function parseZoneTrigger(c: string): TrigSpec[] | null {
     };
     return m[1] ? [{ on: 'attacks' }, target] : [target];
   }
+  m = c.match(/^when cardname becomes level (\d+)$/);
+  if (m) {
+    const n = +m[1];
+    return [{ on: 'levelUp', condition: (_s, e) => e.t === 'level' && e.n === n }];
+  }
   if (/^whenever you create or sacrifice a token$/.test(c)) {
     return [
       { on: 'anyEtb', condition: (s, e, self) => e.t === 'etb' && !!s.cards[e.card]?.token && s.cards[e.card].controller === self.controller },
@@ -1853,6 +1878,8 @@ function parseZoneTrigger(c: string): TrigSpec[] | null {
   return null;
 }
 
+const roman = (r: string): number => ({ I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7 } as Record<string, number>)[r] ?? 0;
+
 function parseTrigger(cond: string): TrigSpec[] | null {
   const c = cond.toLowerCase().replace(/ the battlefield/g, '');
   const zone = parseZoneTrigger(c);
@@ -1885,8 +1912,13 @@ function parseTrigger(cond: string): TrigSpec[] | null {
   if (/^whenever cardname or another creature you control dies$/.test(c)) return [{ on: 'creatureYouControlDies' }];
   for (const [re, on] of map) if (re.test(c)) return [{ on }];
   // Generic "whenever a/another <thing> [you control] enters/dies".
-  const g = cond.replace(/ the battlefield/g, '').match(/^whenever (a|an|another|one or more|one or more other) (.+?)( you control| an opponent controls)? (enters?(?: under your control)?|dies|die)$/i);
+  const orSelf = /^whenever cardname or another /i.test(cond);
+  const g = cond
+    .replace(/ the battlefield/g, '')
+    .replace(/^whenever cardname or another /i, 'whenever another ')
+    .match(/^whenever (a|an|another|one or more|one or more other) (.+?)( you control| an opponent controls)? (enters?(?: under your control)?|dies|die)$/i);
   if (g) {
+    if (orSelf) g[1] = 'a';
     const batched = /one or more/i.test(g[1]);
     if (/one or more other/i.test(g[1])) g[1] = 'another';
     const o = parseObject(singularPhrase(g[2]));
@@ -2089,6 +2121,8 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
   }
   // Equip costs.
   if (/^you may pay \{0\} rather than pay the equip cost of the first equip ability you activate each turn$/i.test(l)) return { statics: [{ kind: 'equipCost', set: 0, when: 'firstEachTurn' }] };
+  if (/^you may pay \{0\} rather than pay the equip cost of the first equip ability you activate during each of your turns$/i.test(l)) return { statics: [{ kind: 'equipCost', set: 0, when: 'firstEachTurn' }] };
+  if (/^during your turn, you may activate equip abilities any time you could cast an instant$/i.test(l)) return { statics: [{ kind: 'equipInstant' }] };
   m = l.match(/^equip abilities you activate cost \{(\d+)\} less to activate$/i);
   if (m) return { statics: [{ kind: 'equipCost', reduce: +m[1] }] };
   if (/^your opponents can't cast spells during your turn$/i.test(l)) return { statics: [{ kind: 'oppsNoCastYourTurn' }] };
@@ -2287,7 +2321,7 @@ function normalizeOracle(text: string, name: string): string {
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   t = t.replace(new RegExp(escape(name), 'g'), 'CARDNAME');
   if (short && short.length > 3) t = t.replace(new RegExp(`\\b${escape(short)}\\b`, 'g'), 'CARDNAME');
-  t = t.replace(/\bthis (creature|artifact|enchantment|land|permanent|equipment|aura|vehicle)\b/gi, 'CARDNAME');
+  t = t.replace(/\bthis (creature|artifact|enchantment|land|permanent|equipment|aura|vehicle|class|saga)\b/gi, 'CARDNAME');
   t = t.replace(/\bthis spell\b/gi, 'this spell');
   return t;
 }
@@ -2339,7 +2373,6 @@ export function convertScryfall(card: ScryCard): CardDef {
   } else if (card.card_faces && card.card_faces.length > 1 && card.layout !== 'split') {
     def.unsupported!.push(`Other face (${card.card_faces.slice(1).map((f) => f.name).join(', ')}) isn't playable yet`);
   }
-  if (card.layout === 'split') def.unsupported!.push('Split card: only the first half is playable');
   if (def.types.includes('Creature')) {
     const p = face.power ?? '0';
     const t = face.toughness ?? '0';
@@ -2410,6 +2443,7 @@ export function convertScryfall(card: ScryCard): CardDef {
       def.triggers!.push({ on: t.on, spellTypes: t.spellTypes, spellNotTypes: t.spellNotTypes, condition: t.condition, batched: t.batched, text: mt.raw, effect: (ctx) => ask(ctx, modes.map((_, i) => i)) });
   };
   let kickedText: string | null = null;
+  let classLevel = 1;
   const spellLines: string[] = [];
   for (const rawLine of text.split('\n')) {
     const line = stripAbilityWord(rawLine.trim());
@@ -2462,9 +2496,56 @@ export function convertScryfall(card: ScryCard): CardDef {
       kickedText = km[1];
       continue;
     }
+    // Classes: "{1}{U}: Level 2" — what follows belongs to that level.
+    const lv = line.match(/^((?:\{[0-9WUBRGC]+\})+): level (\d+)$/i);
+    if (lv && (def.subtypes ?? []).includes('Class')) {
+      const n = +lv[2];
+      def.abilities!.push({
+        text: `${lv[1].toUpperCase()}: Level ${n}`,
+        cost: { mana: lv[1].toUpperCase() },
+        sorcerySpeed: true,
+        condition: (_s, c) => (c.counters.level ?? 1) === n - 1,
+        effect: (ctx) => {
+          if (!ctx.self) return;
+          ctx.self.counters.level = n;
+          ctx.log(`${ctx.self.def} becomes level ${n}.`);
+          ctx.state.events.push({ t: 'level', card: ctx.self.id, n });
+        },
+        aiValue: 1,
+      });
+      classLevel = n;
+      continue;
+    }
+    // Sagas: "I — ...", "II, III — ...".
+    const ch = rawLine.trim().replace(/\bthis Saga\b/g, 'CARDNAME').match(/^((?:[IVX]+)(?:, [IVX]+)*) — (.+)$/);
+    if (ch && (def.subtypes ?? []).includes('Saga')) {
+      const nums = ch[1].split(', ').map(roman);
+      def.sagaChapters = Math.max(def.sagaChapters ?? 0, ...nums);
+      const eff = parseEffect(ch[2].replace(/\.$/, ''), def, `ch${lineNo}`);
+      if (!eff) {
+        def.unsupported!.push(rawLine.trim());
+        continue;
+      }
+      for (const n of nums) {
+        def.triggers!.push({
+          on: 'chapter',
+          text: rawLine.trim(),
+          condition: (_s, e) => e.t === 'lore' && e.n === n,
+          targets: eff.targets.length ? eff.targets : undefined,
+          effect: eff.effect,
+        });
+      }
+      continue;
+    }
     const before = spellEffects.length;
+    const counts = [def.statics!.length, def.triggers!.length, def.abilities!.length];
     if (handleLine(line, rawLine.trim(), def, isSpell, spellTargets, spellEffects, `l${lineNo}`)) {
       if (spellEffects.length > before) spellLines.push(line);
+      if (classLevel > 1) {
+        for (const st of def.statics!.slice(counts[0])) st.level = classLevel;
+        for (const t of def.triggers!.slice(counts[1])) t.level = classLevel;
+        for (const a of def.abilities!.slice(counts[2])) a.level = classLevel;
+      }
       continue;
     }
     def.unsupported!.push(rawLine.trim());
@@ -2535,6 +2616,35 @@ export function convertScryfall(card: ScryCard): CardDef {
       def.effect = (ctx) => runSpell(ctx, 0);
     }
   }
+  // Split cards: cast either half (the other half is registered as its own card), or both with fuse.
+  if (card.layout === 'split' && card.card_faces && card.card_faces.length > 1 && def.types.some((t) => t === 'Instant' || t === 'Sorcery')) {
+    const b = card.card_faces[1];
+    const other = findDef(b.name) ?? convertScryfall({ ...b, color_identity: card.color_identity, legalities: card.legalities, layout: 'normal' });
+    if (!findDef(b.name)) registerCards([{ ...other, isBackFace: true }]);
+    for (const u of other.unsupported ?? []) def.unsupported!.push(`${b.name}: ${u}`);
+    if (!other.cannotCast) {
+      const runOther = (ctx: Ctx, targets: (Target | null)[]) =>
+        other.effect?.(makeCtx(ctx.state, { controller: ctx.controller, source: ctx.source, targets, x: ctx.x, def: other.name }));
+      const mine = def.targets ?? [];
+      const theirs = other.targets ?? [];
+      def.castVariants = [
+        ...(def.castVariants ?? []),
+        { label: `Cast ${b.name}`, cost: b.mana_cost, zone: 'hand', targets: theirs, effect: (ctx) => runOther(ctx, ctx.targets) },
+      ];
+      if (/^fuse\b/im.test(card.oracle_text ?? '') || /^fuse\b/im.test(face.oracle_text ?? '') || /^fuse\b/im.test(b.oracle_text ?? '')) {
+        def.castVariants.push({
+          label: `Cast both halves (fuse)`,
+          cost: `${def.cost ?? ''}${b.mana_cost ?? ''}`,
+          zone: 'hand',
+          targets: [...mine, ...theirs],
+          effect: (ctx) => {
+            def.effect?.(makeCtx(ctx.state, { controller: ctx.controller, source: ctx.source, targets: ctx.targets.slice(0, mine.length), x: ctx.x, def: def.name }));
+            runOther(ctx, ctx.targets.slice(mine.length));
+          },
+        });
+      }
+    }
+  }
   // Commander eligibility & partners.
   const lowerText = (face.oracle_text ?? '').toLowerCase();
   if (/can be your commander/.test(lowerText)) def.canBeCommander = true;
@@ -2567,7 +2677,17 @@ function handleLine(
     def.keywords!.push(...kws);
     return true;
   }
-  if (/^partner(?: with .+)?$|^friends forever$|^choose a background$/i.test(l)) return true;
+  if (/^partner(?: with .+)?$|^friends forever$|^choose a background$|^fuse$/i.test(l)) return true;
+  // Equipment granting a combat-damage trigger: 'Equipped creature gets +1/+1 and has trample and "Whenever CARDNAME deals combat damage to a player, ..."'.
+  const gq = l.match(/^equipped creature (?:gets ([+-]\d+)\/([+-]\d+) and )?has (?:(.+?) and )?"whenever cardname deals combat damage to a player(?: or planeswalker)?, (.+?)\.?"$/i);
+  if (gq) {
+    const kws = gq[3] ? parseKeywordList(gq[3]) : [];
+    const eff = kws && parseEffect(gq[4], def, key);
+    if (!kws || !eff) return false;
+    def.statics!.push({ kind: 'attached', power: gq[1] ? +gq[1] : 0, toughness: gq[2] ? +gq[2] : 0, keywords: kws });
+    def.triggers!.push({ on: 'equippedCreatureDealsCombatDamageToPlayer', text: original, targets: eff.targets.length ? eff.targets : undefined, effect: eff.effect });
+    return true;
+  }
   const cl = l.match(
     /^you may have (?:cardname|\S+) enter(?: the battlefield)? as a copy of (?:any|a|an|another) (creature or planeswalker|artifact or creature|creature|artifact|permanent)( on the battlefield| you control)?(?:, except (.+))?$/i,
   );

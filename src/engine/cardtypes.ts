@@ -165,6 +165,8 @@ export interface Cost {
 }
 
 export interface ActivatedAbility {
+  /** Class level this ability needs. */
+  level?: number;
   text: string;
   cost: Cost;
   mana?: ManaAbilityDef;
@@ -223,6 +225,8 @@ export type TriggerOn =
   | 'anyEtb' // any permanent enters (use `condition` to narrow)
   | 'anyDies' // any creature dies (use `condition` to narrow)
   | 'youWinFlip'
+  | 'chapter' // a lore counter was put on this Saga (use `condition` for the chapter)
+  | 'levelUp' // this Class gained a level (use `condition` for the level)
   | 'youSacrifice' // you sacrifice a permanent (use `condition` to narrow)
   | 'anySacrifice' // any player sacrifices a permanent
   | 'anyToGraveyard' // any permanent goes to a graveyard from the battlefield (use `condition`)
@@ -232,6 +236,8 @@ export type TriggerOn =
   | 'anyWinsFlip';
 
 export interface TriggeredAbility {
+  /** Class level this ability needs (Classes gain abilities as they level up). */
+  level?: number;
   on: TriggerOn;
   text: string;
   spellTypes?: CardType[];
@@ -246,7 +252,10 @@ export interface TriggeredAbility {
   batched?: boolean;
 }
 
-export type StaticAbility =
+/** A static ability; `level` = only from that Class level on. */
+export type StaticAbility = StaticAbilityBase & { level?: number };
+
+type StaticAbilityBase =
   | { kind: 'anthem'; filter: CardFilter; power: number; toughness: number; keywords?: Keyword[]; scale?: (state: GameState, src: CardInstance, card: CardInstance) => number }
   | {
       kind: 'attached';
@@ -267,6 +276,8 @@ export type StaticAbility =
   | { kind: 'oppsNoCastYourTurn'; whileAttached?: boolean }
   /** "The legend rule doesn't apply to permanents you control." */
   | { kind: 'noLegendRule' }
+  /** Armiger Unleashed: during your turn, equip at instant speed. */
+  | { kind: 'equipInstant' }
   /** Ragost: your artifacts are also Foods and have the Food ability. */
   | { kind: 'artifactsAreFood' }
   /** Laboratory Maniac: drawing from an empty library wins the game instead. */
@@ -367,6 +378,8 @@ export interface CardDef {
   /** "You may have this enter as a copy of any <kind> on the battlefield." */
   /** Name shown to players when it differs from the internal name (merged copies). */
   displayName?: string;
+  /** Sagas: the final chapter number (sacrificed after it). */
+  sagaChapters?: number;
   cloneOf?: 'creature' | 'artifact' | 'permanent' | 'creature or planeswalker' | 'artifact or creature';
   /** Clone only something you control; exceptions to the copy (Spark Double). */
   cloneYours?: boolean;

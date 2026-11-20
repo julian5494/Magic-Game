@@ -5,6 +5,7 @@ import { COLORLESS } from './colorless';
 import { GOLD } from './gold';
 import { GREEN } from './green';
 import { FLIPS } from './flips';
+import { SAGAS } from './sagas';
 import { GUILDS } from './guilds';
 import { LANDS } from './lands';
 import { RED } from './red';
@@ -17,7 +18,7 @@ let loaded = false;
 export function loadCards(): void {
   if (loaded) return;
   loaded = true;
-  registerCards([...TOKENS, ...LANDS, ...COLORLESS, ...WHITE, ...BLUE, ...BLACK, ...RED, ...GREEN, ...GOLD, ...GUILDS, ...FLIPS]);
+  registerCards([...TOKENS, ...LANDS, ...COLORLESS, ...WHITE, ...BLUE, ...BLACK, ...RED, ...GREEN, ...GOLD, ...GUILDS, ...FLIPS, ...SAGAS]);
 }
 
 /** Names of all non-token cards players can put in decks. */

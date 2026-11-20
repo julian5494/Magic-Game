@@ -5,8 +5,8 @@ import {
 import { emptyPool } from './mana';
 import { abilityByIndex, getDef, GRANTED_BASE } from './registry';
 import {
-  alivePlayers, apnapOrder, battlefieldCards, cantAttackOrBlock, controllerHasStatic, defOf, getKeywords, getPlayer,
-  getPT, hasKeyword, hasType, isLegendary, log, matchesFilter, newId, nextPlayer, opponentsOf, protectedFrom, snapshot, defColors,
+  alivePlayers, apnapOrder, battlefieldCards, cardStatics, cantAttackOrBlock, controllerHasStatic, defOf, getKeywords, getPlayer,
+  getPT, hasKeyword, hasType, isLegendary, levelOf, log, matchesFilter, newId, nextPlayer, opponentsOf, protectedFrom, snapshot, defColors,
 } from './state';
 import type {
   CardInstance, GameEvent, GameState, PendingTrigger, PlayerId, Snapshot, StackItem, Step, Target,
@@ -39,7 +39,8 @@ export function getTrigger(defName: string, index: number): TriggeredAbility {
 
 function triggersOf(state: GameState, card: CardInstance | Snapshot): { t: TriggeredAbility; index: number }[] {
   const def = defOf(card);
-  const out = (def.triggers ?? []).map((t, index) => ({ t, index }));
+  const lvl = levelOf(card);
+  const out = (def.triggers ?? []).map((t, index) => ({ t, index })).filter(({ t }) => !t.level || lvl >= t.level);
   const kws = 'tapped' in card ? getKeywords(state, card) : def.keywords ?? [];
   if (kws.includes('Prowess')) out.push({ t: KEYWORD_TRIGGERS[-1], index: -1 });
   if (kws.includes('Exalted')) out.push({ t: KEYWORD_TRIGGERS[-2], index: -2 });
@@ -210,6 +211,12 @@ function eventMatches(
       break;
     case 'anyLeaves':
       ok = e.t === 'leaves';
+      break;
+    case 'chapter':
+      ok = e.t === 'lore' && e.card === self.id;
+      break;
+    case 'levelUp':
+      ok = e.t === 'level' && e.card === self.id;
       break;
     case 'becomesTarget':
       ok = e.t === 'targeted' && e.card === self.id;
@@ -512,6 +519,16 @@ export function checkStateBased(state: GameState): boolean {
   const toGraveyard: string[] = [];
   const toDestroy: string[] = [];
   for (const c of battlefieldCards(state)) {
+    const chapters = defOf(c).sagaChapters;
+    if (
+      chapters &&
+      (c.counters.lore ?? 0) >= chapters &&
+      !state.stack.some((x) => x.cardId === c.id && x.kind === 'trigger') &&
+      !state.pendingTriggers.some((t) => t.source === c.id)
+    ) {
+      toGraveyard.push(c.id);
+      log(state, `${c.def} is sacrificed (final chapter).`);
+    }
     if (c.counters['+1/+1'] && c.counters['-1/-1']) {
       const n = Math.min(c.counters['+1/+1'], c.counters['-1/-1']);
       c.counters['+1/+1'] -= n;
@@ -603,6 +620,12 @@ export function canBlock(state: GameState, blocker: CardInstance, attacker: Card
   return true;
 }
 
+/** Put a lore counter on a Saga; its chapter ability triggers. */
+export function addLore(state: GameState, c: CardInstance): void {
+  c.counters.lore = (c.counters.lore ?? 0) + 1;
+  pushEvent(state, { t: 'lore', card: c.id, n: c.counters.lore });
+}
+
 /** Run delayed effects that wait for this step. */
 function runDelayed(state: GameState, step: Step): void {
   if (!state.delayed?.length) return;
@@ -637,7 +660,7 @@ function enterStep(state: GameState, step: Step): void {
       // "Untap ... during each other player's untap step."
       for (const src of battlefieldCards(state)) {
         if (src.controller === ap) continue;
-        for (const st of getDef(src.def).statics ?? []) {
+        for (const st of cardStatics(src)) {
           if (st.kind !== 'untapOthersStep') continue;
           if (st.self) src.tapped = false;
           else for (const c of battlefieldCards(state)) if (c.controller === src.controller && matchesFilter(state, c, st.filter ?? {}, src.controller, src.id)) c.tapped = false;
@@ -663,6 +686,13 @@ function enterStep(state: GameState, step: Step): void {
       state.priority = ap;
       return;
     case 'main1':
+      // Sagas: after your draw step, add a lore counter (first main phase only, once per turn).
+      if (state.sagaTurn !== state.turn) {
+        state.sagaTurn = state.turn;
+        for (const c of battlefieldCards(state)) if (c.controller === ap && defOf(c).sagaChapters) addLore(state, c);
+      }
+      state.priority = ap;
+      return;
     case 'main2':
     case 'endCombat':
       state.priority = ap;

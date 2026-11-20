@@ -12,7 +12,7 @@ import {
 } from './rules';
 import {
   abilitiesOf, alivePlayers, battlefieldCards, commanderIdentity, controllerHasStatic, defColors, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
-  log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot, staticsOf,
+  cardStatics, log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot, staticsOf,
 } from './state';
 import type {
   Action, CardId, CardInstance, CardLook, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot, StackItem,
@@ -37,6 +37,7 @@ function abilityColors(state: GameState, pid: PlayerId, ab: ActivatedAbility): M
 
 /** Activation restrictions: "only if ...", "only once each turn", "only during your turn". */
 function restrictionsOk(state: GameState, c: CardInstance, ab: ActivatedAbility, index: number): boolean {
+  if (ab.level && (c.counters.level ?? 1) < ab.level) return false;
   if (ab.condition && !ab.condition(state, c)) return false;
   if (ab.onceEachTurn && c.usedOnTurn?.[`a${index}`] === state.turn) return false;
   if (ab.yourTurnOnly && state.activePlayer !== c.controller) return false;
@@ -223,7 +224,7 @@ function spellCost(state: GameState, card: CardInstance, x: number, variant?: Ca
   // Cost changes: taxes add generic mana, reductions take it away (never below zero).
   let delta = -(def.costReduction?.(state, pid) ?? 0);
   for (const src of battlefieldCards(state)) {
-    for (const st of defOf(src).statics ?? []) {
+    for (const st of cardStatics(src)) {
       if (st.kind !== 'costMod') continue;
       const applies = st.whose === 'all' || (st.whose === 'you') === (src.controller === pid);
       if (applies && matchesFilter(state, card, st.filter, pid, src.id)) delta += st.delta;
@@ -317,7 +318,7 @@ function allLegalActions(state: GameState, pid: PlayerId): PlayableAction[] {
   const silenced =
     state.activePlayer !== pid &&
     battlefieldCards(state).some(
-      (c) => c.controller === state.activePlayer && (defOf(c).statics ?? []).some((st) => st.kind === 'oppsNoCastYourTurn' && (!st.whileAttached || !!c.attachedTo)),
+      (c) => c.controller === state.activePlayer && cardStatics(c).some((st) => st.kind === 'oppsNoCastYourTurn' && (!st.whileAttached || !!c.attachedTo)),
     );
   for (const id of silenced ? [] : [...p.hand, ...p.command, ...p.graveyard, ...impulse, ...topSpells]) {
     const card = state.cards[id];
@@ -453,7 +454,8 @@ function abilityAction(
   ab: ActivatedAbility,
   sorcery: boolean,
 ): PlayableAction | null {
-  if (ab.sorcerySpeed && !sorcery) return null;
+  const instantEquip = ab.equip && state.activePlayer === pid && controllerHasStatic(state, pid, 'equipInstant');
+  if (ab.sorcerySpeed && !sorcery && !instantEquip) return null;
   if (ab.cost.tap && !canUseTap(state, card)) return null;
   if (!restrictionsOk(state, card, ab, i)) return null;
   if (ab.cost.loyalty !== undefined) {
