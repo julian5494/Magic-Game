@@ -51,7 +51,7 @@ describe('treasure and sacrifice engines', () => {
     const life = P(s, B).life;
     const ab = legalActions(s, A).find((a) => a.cardId === tr.id)!;
     s = act(s, A, { type: 'manaTap', cardId: tr.id, ability: ab.ability!, color: 'R' });
-    s = settle(s, (d) => (d.kind === 'chooseTarget' || d.kind === 'chooseTargets' ? { targets: [player(B)] } : undefined));
+    s = settle(s, (d) => (d.kind === 'chooseTargets' ? { targets: [player(B)] } : undefined));
     expect(P(s, B).life).toBe(life - 1);
   });
 
