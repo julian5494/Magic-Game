@@ -436,7 +436,7 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 /* The bar is drawn by ::before; the rail box itself is tall enough to contain the buttons under the steps,
    because on the 3D table the browser only registers clicks inside a raised element's own box. */
 .rail::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 40px; border-radius: 20px; background: linear-gradient(#0008, #0004); box-shadow: inset 0 2px 4px #000c, 0 1px 0 #ffffff18; }
-.rail .tbtn { pointer-events: auto; }
+.rail .tbtn, .rail .step-lbl { pointer-events: auto; }
 .rail-tail { height: 40px; align-items: center; }
 .rail .step { position: relative; height: 76px; line-height: 40px; display: block; font-weight: 700; font-size: 12.5px; letter-spacing: 2px; color: #8b6a35; text-transform: uppercase; white-space: nowrap; }
 .rail .step.on { color: var(--gold1); text-shadow: 0 0 10px var(--gold-glow), 0 0 22px var(--amber); }
@@ -938,3 +938,17 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .pile3d .top.face-up { background-size: cover; background-position: center; border-radius: 5%; cursor: default; box-shadow: 0 0 0 1px #000a; }
 .pile3d .top.face-up.playable { cursor: pointer; box-shadow: 0 0 0 2px var(--gold-glow, #ffd36a), 0 0 14px var(--amber, #ffb347); }
 .pile3d .top.face-up .loose-name { position: absolute; inset: 6px; font: 700 10px Inter, sans-serif; color: #f0dcb4; }
+
+/* Phase stops: click a step on the rail to choose whether the game pauses there. */
+.rail .step-lbl { all: unset; pointer-events: auto; cursor: pointer; position: relative; display: inline-block; padding: 0 2px; border-radius: 6px; }
+.rail .step-lbl:hover, .rail .step-lbl.open { color: var(--gold1); text-shadow: 0 0 8px var(--gold-glow); }
+.rail .step-lbl:focus-visible { outline: 2px solid var(--gold-glow); }
+.stop-flags { position: absolute; left: 50%; top: calc(100% - 10px); transform: translateX(-50%); display: flex; gap: 3px; pointer-events: none; }
+.tavern.three .stop-flags { top: calc(100% - 14px); gap: 4px; }
+.flag { display: inline-block; width: 8px; height: 10px; clip-path: polygon(0 0, 100% 0, 100% 70%, 50% 100%, 0 70%); box-shadow: inset 0 0 0 1px #0006; }
+.tavern.three .stop-flags .flag { width: 11px; height: 14px; }
+.flag.mine { background: linear-gradient(#ffe39a, #c8962e); }
+.flag.theirs { background: linear-gradient(#ff8a7a, #a3262a); }
+.action-pop .pop-check { display: flex; align-items: center; gap: 6px; padding: 5px 4px; font: 600 13px Inter, sans-serif; color: #f0dcb4; cursor: pointer; white-space: nowrap; }
+.action-pop .pop-check .flag { margin-left: auto; }
+.action-pop .pop-note { max-width: 230px; padding: 4px 4px 2px; font: 500 11px Inter, sans-serif; color: #c9b08a; }

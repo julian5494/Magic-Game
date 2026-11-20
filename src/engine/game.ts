@@ -18,7 +18,7 @@ import type {
   Action, CardId, CardInstance, CardLook, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot, StackItem,
   Target, TargetSpecView,
 } from './types';
-import { COLORS } from './types';
+import { COLORS, DEFAULT_STOPS, STOP_STEPS } from './types';
 
 export class RulesError extends Error {}
 
@@ -369,6 +369,11 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     case 'setAutoPass':
       p.autoPass = action.mode;
       return;
+    case 'setStops': {
+      const clean = (steps: unknown) => (Array.isArray(steps) ? STOP_STEPS.filter((st) => steps.includes(st)) : []);
+      p.stops = { mine: clean(action.mine), theirs: clean(action.theirs) };
+      return;
+    }
     case 'passUntilEndOfTurn':
       p.passUntilTurn = state.turn;
       if (state.priority === pid && state.decisions.length === 0) doPass(state, pid);
@@ -939,8 +944,11 @@ function shouldAutoPass(state: GameState, pid: PlayerId): boolean {
   }
   if (p.autoPass === 'none') return false;
   if (top) return top.controller === pid;
-  const stops = state.activePlayer === pid ? ['main1', 'main2', 'declareBlockers'] : ['declareBlockers', 'end'];
-  return !stops.includes(state.step);
+  const st = p.stops ?? DEFAULT_STOPS;
+  const stops = state.activePlayer === pid ? st.mine : st.theirs;
+  // First-strike damage and the end of combat count as the combat damage stop.
+  const step = state.step === 'firstStrikeDamage' || state.step === 'endCombat' ? 'combatDamage' : state.step;
+  return !stops.includes(step);
 }
 
 /** Advance the game until some player needs to make a choice. */

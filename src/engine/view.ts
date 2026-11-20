@@ -4,8 +4,9 @@ import {
   attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, staticsOf, typeLine,
 } from './state';
 import type {
-  CardId, CardInstance, Color, FoilKind, Decision, GameState, Keyword, LogEntry, ManaSym, PlayableAction, PlayerId, Step, Target,
+  CardId, CardInstance, Color, FoilKind, Decision, GameState, Keyword, LogEntry, ManaSym, PlayableAction, PlayerId, Step, Stops, Target,
 } from './types';
+import { DEFAULT_STOPS } from './types';
 
 export interface CardView {
   id: CardId;
@@ -77,6 +78,8 @@ export interface PlayerView {
   top?: CardId;
   /** True when everyone can see the top card (it's played revealed). */
   topRevealed?: boolean;
+  /** Where this player's auto-pass stops. */
+  stops: Stops;
 }
 
 export interface StackView {
@@ -213,6 +216,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     colorIdentity: p.commanders.flatMap((id) => (state.cards[id] ? colorIdentity(getDef(state.cards[id].def)) : [])),
     mana: availableMana(state, p.id),
     commanders: [...p.commanders],
+    stops: p.stops ?? DEFAULT_STOPS,
     ...topOf(p),
   }));
 

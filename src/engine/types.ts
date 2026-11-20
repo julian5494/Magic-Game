@@ -33,6 +33,18 @@ export type Keyword =
 
 export type ZoneName = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'command' | 'stack';
 
+/** Where a player's auto-pass stops: steps on their own turns and on opponents' turns. */
+export interface Stops {
+  mine: Step[];
+  theirs: Step[];
+}
+
+/** By default you stop for your main phases and to act after blocks, and at opponents' end steps (instant time). */
+export const DEFAULT_STOPS: Stops = { mine: ['main1', 'main2', 'declareBlockers'], theirs: ['declareBlockers', 'end'] };
+
+/** Steps a stop can be put on (the phase rail). */
+export const STOP_STEPS: Step[] = ['upkeep', 'draw', 'main1', 'beginCombat', 'declareAttackers', 'declareBlockers', 'combatDamage', 'main2', 'end'];
+
 export type Step =
   | 'untap' | 'upkeep' | 'draw' | 'main1' | 'beginCombat' | 'declareAttackers' | 'declareBlockers'
   | 'firstStrikeDamage' | 'combatDamage' | 'endCombat' | 'main2' | 'end' | 'cleanup';
@@ -119,6 +131,8 @@ export interface Player {
   /** Keep priority after casting/activating (to respond to your own spell). */
   holding?: boolean;
   passUntilTurn: number | null;
+  /** Steps auto-pass stops at (when there's something you could do). */
+  stops?: Stops;
   lifeGainedThisTurn: number;
   /** Extra land drops granted this turn ("You may play an additional land this turn"). */
   extraLandsThisTurn?: number;
@@ -302,6 +316,8 @@ export type Action =
   | { type: 'manaTap'; cardId: CardId; ability: number; color?: ManaSym }
   | { type: 'decide'; decisionId: string; answer: DecisionAnswer }
   | { type: 'setAutoPass'; mode: AutoPassMode }
+  /** Where auto-pass stops (when you have something you could do): steps on your turns, and on opponents' turns. */
+  | { type: 'setStops'; mine: Step[]; theirs: Step[] }
   | { type: 'passUntilEndOfTurn' }
   | { type: 'concede' };
 

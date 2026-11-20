@@ -4,6 +4,7 @@ import type { Anchors } from '../three/TableScene';
 import { useTable3D, useTableSettings } from '../three/useTable3D';
 import type { Action, AutoPassMode, CardId, ManaSym, PlayableAction, PlayerId, Step, Target, TargetSpecView } from '../../engine/types';
 import type { CardView, GameView, PlayerView, StackView } from '../../engine/view';
+import { DEFAULT_STOPS } from '../../engine/types';
 import type { ClientMessage } from '../../shared/protocol';
 import type { NetState } from '../net';
 import { previewCombat, type CombatPreview, type PlannedAttack } from '../combat';
@@ -108,6 +109,8 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const hover = hoverCard ? view.cards[hoverCard.id] ?? hoverCard : null;
   const [pending, setPending] = useState<Pending | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  // The phase-rail step whose stop settings are open.
+  const [stopMenu, setStopMenu] = useState<Step | null>(null);
   const [zone, setZone] = useState<ZoneOpen | null>(null);
   const [attacks, setAttacks] = useState<Record<CardId, PlayerId>>({});
   const [attackTarget, setAttackTarget] = useState<PlayerId | null>(null);
@@ -151,6 +154,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   const decision = view.decision;
   const myDecisionNow = decision && decision.player === view.you ? decision : null;
   const me = view.players.find((p) => p.id === view.you)!;
+  const myStops = me.stops ?? DEFAULT_STOPS;
 
   // Opponents in turn order starting after me.
   const opponents = useMemo(() => {
@@ -882,9 +886,26 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
             <div className="rail">
               {RAIL.map((s) => {
                 const here = buttons.filter((b) => b.at === s);
+                const mine = myStops.mine.includes(s);
+                const theirs = myStops.theirs.includes(s);
                 return (
-                  <span key={s} className={`step ${s === curStep ? 'on' : ''}`}>
-                    {STEP_LABELS[s]}
+                  <span key={s} className={`step ${s === curStep ? 'on' : ''}`} data-step={s}>
+                    <button
+                      className={`step-lbl ${stopMenu === s ? 'open' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenu(null);
+                        setStopMenu(stopMenu === s ? null : s);
+                      }}
+                    >
+                      {STEP_LABELS[s]}
+                      {(mine || theirs) && (
+                        <span className="stop-flags">
+                          {mine && <i className="flag mine" />}
+                          {theirs && <i className="flag theirs" />}
+                        </span>
+                      )}
+                    </button>
                     {here.length > 0 && <span className="go">{here.map(btn)}</span>}
                   </span>
                 );
@@ -896,7 +917,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 
   return (
-    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => setMenu(null)} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
+    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => { setMenu(null); setStopMenu(null); }} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
       <div className="table3d" ref={tableRef} />
       {table3d ? createPortal(planeEl, boardEl) : <div className="stage">{planeEl}</div>}
 
@@ -1194,6 +1215,26 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         </div>
       )}
 
+      {stopMenu && (
+        <ActionPopover anchor={`[data-step="${stopMenu}"]`} onClose={() => setStopMenu(null)}>
+          <div className="pop-title">Stop at {STEP_LABELS[stopMenu]}</div>
+          {(['mine', 'theirs'] as const).map((whose) => (
+            <label key={whose} className="pop-check">
+              <input
+                type="checkbox"
+                checked={myStops[whose].includes(stopMenu)}
+                onChange={(e) => {
+                  const next = { ...myStops, [whose]: e.target.checked ? [...myStops[whose], stopMenu] : myStops[whose].filter((x) => x !== stopMenu) };
+                  act({ type: 'setStops', mine: next.mine, theirs: next.theirs });
+                }}
+              />{' '}
+              {whose === 'mine' ? 'On my turns' : "On opponents' turns"}
+              <i className={`flag ${whose}`} />
+            </label>
+          ))}
+          <div className="pop-note">The game pauses here when you have something you could play.</div>
+        </ActionPopover>
+      )}
       {menu && menu.cardId !== held && view.cards[menu.cardId] && (
         <ActionPopover anchor={`[data-card-id="${menu.cardId}"]`} onClose={() => setMenu(null)}>
           <div className="pop-title">{view.cards[menu.cardId].name}</div>

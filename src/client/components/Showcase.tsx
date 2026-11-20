@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CardId, Keyword, PlayerId } from '../../engine/types';
+import { DEFAULT_STOPS } from '../../engine/types';
 import type { CardView, GameView, PlayerView } from '../../engine/view';
 import type { NetState } from '../net';
 import { GameBoard } from './GameBoard';
@@ -184,6 +185,7 @@ function player(id: PlayerId, name: string, life: number, commanders: CardId[], 
     colorIdentity: [],
     mana: { total: 0, groups: [] },
     commanders,
+    stops: DEFAULT_STOPS,
     ...extra,
   };
 }
