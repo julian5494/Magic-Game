@@ -2331,7 +2331,8 @@ function stripAbilityWord(line: string): string {
 }
 
 export function convertScryfall(card: ScryCard): CardDef {
-  const face: ScryFace = card.card_faces && card.card_faces.length && !card.mana_cost && !card.oracle_text ? card.card_faces[0] : card;
+  const face: ScryFace =
+    card.card_faces && card.card_faces.length && ((!card.mana_cost && !card.oracle_text) || card.layout === 'split') ? card.card_faces[0] : card;
   const name = face.name;
   const tl = parseTypeLine(face.type_line ?? card.type_line ?? '');
   const def: CardDef = {
