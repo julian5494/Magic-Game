@@ -267,6 +267,8 @@ export type StaticAbility =
   | { kind: 'oppsNoCastYourTurn'; whileAttached?: boolean }
   /** "The legend rule doesn't apply to permanents you control." */
   | { kind: 'noLegendRule' }
+  /** Ragost: your artifacts are also Foods and have the Food ability. */
+  | { kind: 'artifactsAreFood' }
   /** Laboratory Maniac: drawing from an empty library wins the game instead. */
   | { kind: 'emptyDrawWins' }
   | { kind: 'noMaxHandSize' }

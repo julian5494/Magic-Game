@@ -1,6 +1,6 @@
-import type { CardDef, CardFilter, StaticAbility } from './cardtypes';
+import type { ActivatedAbility, CardDef, CardFilter, StaticAbility } from './cardtypes';
 import { costColors, manaValue } from './mana';
-import { getDef } from './registry';
+import { getDef, GRANTED, GRANTED_BASE } from './registry';
 import type {
   CardId, CardInstance, CardType, Color, GameState, Keyword, Player, PlayerId, Snapshot,
 } from './types';
@@ -55,7 +55,30 @@ export function defOf(card: CardInstance | Snapshot): CardDef {
 }
 
 export function hasType(card: CardInstance | Snapshot, t: CardType): boolean {
+  if ('temp' in card && card.temp.animate && (t === 'Creature' || t === 'Artifact')) return true;
   return defOf(card).types.includes(t);
+}
+
+/** A permanent's activated abilities with their indices: its own, then any granted by effects. */
+export function abilitiesOf(state: GameState, card: CardInstance): { ab: ActivatedAbility; i: number }[] {
+  const out = (defOf(card).abilities ?? []).map((ab, i) => ({ ab, i }));
+  if (card.zone === 'battlefield' && hasType(card, 'Artifact') && !(defOf(card).subtypes ?? []).includes('Food') && controllerHasStatic(state, card.controller, 'artifactsAreFood')) {
+    out.push({ ab: GRANTED[0], i: GRANTED_BASE });
+  }
+  return out;
+}
+
+/** Card types, including temporary ones ("becomes an artifact creature until end of turn"). */
+export function typesOf(card: CardInstance): CardType[] {
+  const types = defOf(card).types;
+  return card.temp?.animate && !types.includes('Creature') ? [...types, 'Creature'] : types;
+}
+
+/** Subtypes, including ones granted by effects (Vihaan's Construct Assassins, Ragost's Foods). */
+export function subtypesOf(state: GameState, card: CardInstance): string[] {
+  const out = [...(defOf(card).subtypes ?? []), ...(card.temp?.animate?.subtypes ?? [])];
+  if (card.zone === 'battlefield' && hasType(card, 'Artifact') && !out.includes('Food') && controllerHasStatic(state, card.controller, 'artifactsAreFood')) out.push('Food');
+  return out;
 }
 
 export function isCreature(card: CardInstance): boolean {
@@ -139,8 +162,8 @@ function staticMods(state: GameState, card: CardInstance) {
 
 export function getPT(state: GameState, card: CardInstance): { power: number; toughness: number } {
   const def = defOf(card);
-  let power = def.power ?? 0;
-  let toughness = def.toughness ?? 0;
+  let power = card.temp.animate?.power ?? def.power ?? 0;
+  let toughness = card.temp.animate?.toughness ?? def.toughness ?? 0;
   if (def.dynamicPT) {
     const d = def.dynamicPT(state, card);
     power += d.power;
@@ -191,7 +214,8 @@ export function snapshot(state: GameState, card: CardInstance): Snapshot {
     controller: card.controller,
     power: pt.power,
     toughness: pt.toughness,
-    types: [...defOf(card).types],
+    types: [...typesOf(card)],
+    subtypes: subtypesOf(state, card),
     token: card.token,
     commander: card.commander,
     zone: card.zone,
@@ -210,9 +234,10 @@ export function matchesFilter(
 ): boolean {
   if (!f) return true;
   const def = defOf(card);
-  if (f.types && !f.types.some((t) => def.types.includes(t))) return false;
-  if (f.notTypes && f.notTypes.some((t) => def.types.includes(t))) return false;
-  if (f.subtypes && !f.subtypes.some((t) => (def.subtypes ?? []).includes(t)) && !(def.keywords ?? []).includes('Changeling')) return false;
+  const types = typesOf(card);
+  if (f.types && !f.types.some((t) => types.includes(t))) return false;
+  if (f.notTypes && f.notTypes.some((t) => types.includes(t))) return false;
+  if (f.subtypes && !f.subtypes.some((t) => subtypesOf(state, card).includes(t)) && !(def.keywords ?? []).includes('Changeling')) return false;
   if (f.supertypes && !f.supertypes.some((t) => (def.supertypes ?? []).includes(t))) return false;
   if (f.controller === 'you' && card.controller !== controller) return false;
   if (f.controller === 'opponent' && card.controller === controller) return false;

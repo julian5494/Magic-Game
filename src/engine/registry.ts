@@ -18,6 +18,18 @@ export function equipAbility(cost: string, filter: CardFilter = {}, label = ''):
 
 const DB = new Map<string, CardDef>();
 
+/** Abilities that effects grant to other permanents, by a fixed index (2000 + position) so the stack can refer to them. */
+export const GRANTED_BASE = 2000;
+export const GRANTED: ActivatedAbility[] = [
+  // 0: Food (Ragost, Deft Gastronaut makes your artifacts Foods).
+  { text: '{2}, {T}, Sacrifice this artifact: You gain 3 life.', cost: { mana: '{2}', tap: true, sacrificeSelf: true }, effect: (ctx) => ctx.gainLife(ctx.controller, 3), aiValue: 0 },
+];
+
+/** An activated ability by index: the card's own, or a granted one (index >= GRANTED_BASE). */
+export function abilityByIndex(def: CardDef, index: number): ActivatedAbility {
+  return index >= GRANTED_BASE ? GRANTED[index - GRANTED_BASE] : def.abilities![index];
+}
+
 function normalize(name: string): string {
   return name.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim();
 }

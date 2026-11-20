@@ -83,7 +83,14 @@ export interface CardInstance {
   deathtouched: boolean;
   counters: Record<string, number>;
   /** Until-end-of-turn modifications. */
-  temp: { power: number; toughness: number; keywords: Keyword[]; cantBlock?: boolean };
+  temp: {
+    power: number;
+    toughness: number;
+    keywords: Keyword[];
+    cantBlock?: boolean;
+    /** Until end of turn it's also a creature with this base P/T and these creature types (Vihaan's Treasures). */
+    animate?: { power: number; toughness: number; subtypes?: string[] };
+  };
   attachedTo: CardId | null;
   token: boolean;
   commander: boolean;
@@ -203,6 +210,8 @@ export interface Snapshot {
   linked?: CardId[];
   /** Counters it had as it left (for persist / undying). */
   counters?: Record<string, number>;
+  /** Its subtypes as it was (including ones granted by effects: Ragost's Foods). */
+  subtypes?: string[];
 }
 
 export type GameEvent =

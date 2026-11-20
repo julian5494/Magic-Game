@@ -5,13 +5,13 @@ import {
   drawCards, gainLife, legalTargets, loseLife, makeCard, makeCtx, manaMultiplier, moveCard, pushEvent, queueDecision, runCardHandler,
   sameTarget, shuffle, tapPermanent,
 } from './ops';
-import { findDef, getDef, registerCards } from './registry';
+import { abilityByIndex, findDef, getDef, GRANTED_BASE, registerCards } from './registry';
 import {
   advanceStep, canAttack, canBlock, checkStateBased, collectTriggers, finishCleanup, getTrigger, playerLoses,
   processTriggers, putTriggerOnStack, resolveTop, startTurn,
 } from './rules';
 import {
-  alivePlayers, battlefieldCards, commanderIdentity, controllerHasStatic, defColors, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
+  abilitiesOf, alivePlayers, battlefieldCards, commanderIdentity, controllerHasStatic, defColors, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
   log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot, staticsOf,
 } from './state';
 import type {
@@ -98,7 +98,7 @@ export function manaSources(state: GameState, pid: PlayerId, exclude: CardId[] =
   const out: ManaSource[] = [];
   for (const c of battlefieldCards(state)) {
     if (c.controller !== pid || exclude.includes(c.id)) continue;
-    defOf(c).abilities?.forEach((ab, i) => {
+    abilitiesOf(state, c).forEach(({ ab, i }) => {
       if (!ab.mana || ab.cost.mana || ab.cost.sacrifice) return;
       if (ab.cost.life && getPlayer(state, pid).life < ab.cost.life) return;
       if (ab.cost.tap && !canUseTap(state, c)) return;
@@ -117,7 +117,7 @@ export function manaSources(state: GameState, pid: PlayerId, exclude: CardId[] =
 }
 
 function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, index: number, color?: ManaSym): void {
-  const ab = defOf(c).abilities![index];
+  const ab = abilityByIndex(defOf(c), index);
   const colors = abilityColors(state, pid, ab);
   const sym = color && colors.includes(color) ? color : colors[0];
   markUsed(state, c, ab, index);
@@ -415,7 +415,7 @@ function allLegalActions(state: GameState, pid: PlayerId): PlayableAction[] {
 
   for (const card of battlefieldCards(state)) {
     if (card.controller !== pid) continue;
-    defOf(card).abilities?.forEach((ab, i) => {
+    abilitiesOf(state, card).forEach(({ ab, i }) => {
       if (ab.mana) {
         if (!ab.cost.mana && !ab.cost.sacrifice) {
           if ((!ab.cost.tap || canUseTap(state, card)) && (!ab.cost.life || p.life >= ab.cost.life) && restrictionsOk(state, card, ab, i)) {
@@ -643,7 +643,7 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     if (!a) throw new RulesError("Can't activate that now");
     const card = state.cards[action.cardId];
     const def = defOf(card);
-    if (action.ability >= HAND_ABILITY) {
+    if (action.ability >= HAND_ABILITY && action.ability < GRANTED_BASE) {
       const hab = def.handAbilities![action.ability - HAND_ABILITY];
       const targets = validateTargets(a.targets, action.targets);
       if (hab.cost.mana) pay(state, pid, parseCost(hab.cost.mana), []);
@@ -654,7 +654,7 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       state.passes = [];
       return;
     }
-    const ab = def.abilities![action.ability];
+    const ab = abilityByIndex(def, action.ability);
     const targets = validateTargets(a.targets, action.targets);
     let sacrificed: Snapshot | undefined;
     if (ab.cost.sacrifice) {
@@ -905,7 +905,7 @@ const HANDLERS: Record<string, Handler> = {
     if (a.option !== 'yes') return;
     const { init, kind, index } = d.data;
     const def = getDef(init.def);
-    const ability = kind === 'ability' ? def.abilities![index] : getTrigger(init.def, index);
+    const ability = kind === 'ability' ? abilityByIndex(def, index) : getTrigger(init.def, index);
     ability.effect?.(makeCtx(state, init));
   },
   'core:shock': (state, d, a) => {

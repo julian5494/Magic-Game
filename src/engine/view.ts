@@ -1,7 +1,7 @@
 import { legalActions, manaSources } from './game';
 import { getDef } from './registry';
 import {
-  attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, staticsOf, typeLine,
+  attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, staticsOf, typeLine, typesOf,
 } from './state';
 import type {
   CardId, CardInstance, Color, FoilKind, Decision, GameState, Keyword, LogEntry, ManaSym, PlayableAction, PlayerId, Step, Stops, Target,
@@ -126,7 +126,7 @@ export function cardView(state: GameState, c: CardInstance): CardView {
     name: def.displayName ?? def.name,
     cost: def.cost,
     typeLine: typeLine(def),
-    types: def.types,
+    types: typesOf(c),
     text: def.text ?? '',
     colors: defColors(def),
     owner: c.owner,

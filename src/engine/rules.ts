@@ -3,7 +3,7 @@ import {
   createToken, dealDamage, drawCards, isStillLegal, legalTargets, makeCtx, moveCard, pushEvent, queueDecision, runCardHandler, setPlayerLoses,
 } from './ops';
 import { emptyPool } from './mana';
-import { getDef } from './registry';
+import { abilityByIndex, getDef, GRANTED_BASE } from './registry';
 import {
   alivePlayers, apnapOrder, battlefieldCards, cantAttackOrBlock, controllerHasStatic, defOf, getKeywords, getPlayer,
   getPT, hasKeyword, hasType, isLegendary, log, matchesFilter, newId, nextPlayer, opponentsOf, protectedFrom, snapshot, defColors,
@@ -412,9 +412,9 @@ export function resolveTop(state: GameState): void {
   // Activated or triggered ability.
   const ability =
     item.kind === 'ability'
-      ? item.index! >= 1000
+      ? item.index! >= 1000 && item.index! < GRANTED_BASE
         ? def.handAbilities![item.index! - 1000]
-        : def.abilities![item.index!]
+        : abilityByIndex(def, item.index!)
       : getTrigger(item.def, item.index!);
   const specs = ability.targets ?? [];
   const targets = item.targets.map((t, i) =>

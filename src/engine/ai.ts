@@ -4,7 +4,7 @@ import type { TargetSpec } from './cardtypes';
 import { canBlock, getTrigger } from './rules';
 import { legalActions } from './game';
 import { parseCost } from './mana';
-import { getDef } from './registry';
+import { abilityByIndex, getDef } from './registry';
 import {
   battlefieldCards, cmc, defOf, getKeywords, getPlayer, getPT, hasType, isMainPhase, opponentsOf,
 } from './state';
@@ -117,9 +117,9 @@ function choosePlay(state: GameState, pid: PlayerId): Action | null {
   const cast = castBest(state, pid, legal, false);
   if (cast) return cast;
   for (const a of legal.filter((l) => l.type === 'activate')) {
-    if (a.ability! >= 1000 || a.isMana) continue; // cycling / mana abilities with costs: bots skip them
+    if ((a.ability! >= 1000 && a.ability! < 2000) || a.isMana) continue; // cycling / mana abilities with costs: bots skip them
     const card = state.cards[a.cardId];
-    const ab = defOf(card).abilities![a.ability!];
+    const ab = abilityByIndex(defOf(card), a.ability!);
     if (!ab || !ab.aiValue || ab.cost.sacrifice) continue;
     if (ab.equip && card.attachedTo) continue;
     const targets = pickTargets(state, pid, a.targets, ab.targets);

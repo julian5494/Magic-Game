@@ -10,7 +10,7 @@ import type {
 import { parseCost } from './mana';
 import { parseCount, parseExpr } from './oracle-amounts';
 import { equipAbility, findDef, getDef, registerCards } from './registry';
-import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf, snapshot } from './state';
+import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf, snapshot, subtypesOf } from './state';
 import type { CardInstance, CardType, Color, GameState, Keyword, ManaSym, PlayerId, Snapshot, Supertype, Target } from './types';
 import { legalTargets, makeCtx } from './ops';
 
@@ -227,7 +227,10 @@ function parseNouns(phrase: string): { types?: CardType[]; filter: CardFilter } 
     const original = words[words.length - 1];
     const adjs = words.slice(0, -1);
     if (TYPE_WORDS[noun]) types.push(TYPE_WORDS[noun]);
-    else if (noun === 'permanent') anyPermanent = true;
+    else if (noun === 'outlaw') {
+      addCustom(filter, (st, c) => subtypesOf(st, c).some((x) => OUTLAWS.includes(x)));
+      if (!types.includes('Creature')) types.push('Creature');
+    } else if (noun === 'permanent') anyPermanent = true;
     else if (noun === 'card') anyPermanent = true;
     else if (/^[A-Z]/.test(original)) {
       const sub = singularSubtype(original);
@@ -630,6 +633,25 @@ const SENTENCES: SentenceParser[] = [
       },
       handlers: {
         [k]: (ctx, a) => ctx.search({ filter: { basicLand: true, types: ['Land'], subtypes: [String(a.option)] }, max: 2, dest: 'battlefield', tapped: !!m[1], label: `Search for up to two basic ${a.option} cards` }),
+      },
+    };
+  },
+  // "(Have) Treasures you control become 3/3 Construct Assassin artifact creatures in addition to their other types until end of turn",
+  // "Artifacts you control become artifact creatures with base power and toughness 5/5 until end of turn".
+  (s) => {
+    const m =
+      s.match(/^(?:have )?(.+?) you control become (\d+)\/(\d+) ((?:[A-Z][a-z]+ )*)artifact creatures(?: in addition to their other types)? until end of turn$/) ??
+      s.match(/^(?:have )?(.+?) you control become artifact creatures with base power and toughness (\d+)\/(\d+)()(?: in addition to their other types)? until end of turn$/i);
+    if (!m) return null;
+    const o = parseNouns(singularPhrase(m[1]));
+    if (!o) return null;
+    const subtypes = m[4].trim() ? m[4].trim().split(/\s+/) : [];
+    return {
+      targets: [],
+      run: (ctx) => {
+        for (const c of ctx.permanents({ ...o.filter, types: o.types, controller: 'you' })) {
+          c.temp.animate = { power: +m[2], toughness: +m[3], subtypes };
+        }
       },
     };
   },
@@ -1720,10 +1742,10 @@ function snapPredicate(phrase: string): ((snap: Snapshot) => boolean) | null {
       else if (w.startsWith('non') && TYPE_WORDS[w.slice(3)]) t.push((sn) => !sn.types.includes(TYPE_WORDS[w.slice(3)]));
       else if (w === 'token') t.push((sn) => sn.token);
       else if (w === 'nontoken') t.push((sn) => !sn.token);
-      else if (w === 'outlaw') t.push((sn) => (findDef(sn.def)?.subtypes ?? []).some((x) => OUTLAWS.includes(x)));
+      else if (w === 'outlaw') t.push((sn) => (sn.subtypes ?? findDef(sn.def)?.subtypes ?? []).some((x) => OUTLAWS.includes(x)));
       else if (/^[a-z]+$/.test(w) && w.length > 2) {
         const sub = w[0].toUpperCase() + w.slice(1);
-        t.push((sn) => (findDef(sn.def)?.subtypes ?? []).includes(sub));
+        t.push((sn) => (sn.subtypes ?? findDef(sn.def)?.subtypes ?? []).includes(sub));
       } else return null;
     }
     tests.push(t);
@@ -1996,6 +2018,7 @@ function attachedCount(phrase: string): ((state: GameState, src: CardInstance, c
 function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyword[]; dynamicPT?: CardDef['dynamicPT'] } | null {
   const l = line.replace(/\.$/, '');
   if (/^(?:metalcraft — )?equipment you control have equip \{0\} as long as you control three or more artifacts$/i.test(l)) return { statics: [{ kind: 'equipCost', set: 0, when: 'metalcraft' }] };
+  if (/^artifacts you control are foods in addition to their other types and have "\{2\}, \{t\}, sacrifice (?:cardname|this artifact): you gain 3 life\.?"$/i.test(l)) return { statics: [{ kind: 'artifactsAreFood' }] };
   if (/^if you would draw a card while your library has no cards in it, you win the game instead$/i.test(l)) return { statics: [{ kind: 'emptyDrawWins' }] };
   if (/^treasures you control have "\{t\}, sacrifice (?:cardname|this artifact): add two mana of any one color\.?"$/i.test(l)) return { statics: [{ kind: 'treasureMana2' }] };
   // Variable power/toughness.
@@ -2145,6 +2168,7 @@ function parseIfCondition(text: string): ((state: GameState, pid: PlayerId) => b
     return (s, pid) => (m![2].toLowerCase() === 'more' ? getPlayer(s, pid).life >= n : getPlayer(s, pid).life <= n);
   }
   if (/^it's the first combat phase of (?:the|your) turn$/i.test(t)) return (s) => (s.combatsThisTurn ?? 0) <= 1;
+  if (/^you(?:'ve)? gained life this turn$/i.test(t)) return (s, pid) => getPlayer(s, pid).lifeGainedThisTurn > 0;
   return parseControlCondition(t);
 }
 
