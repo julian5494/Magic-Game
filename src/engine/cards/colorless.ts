@@ -113,22 +113,10 @@ export const COLORLESS: CardDef[] = [
       },
     ],
   },
-  artifact('Lightning Greaves', '{2}', 'Equipped creature has haste and shroud.\nWhenever a creature enters under your control, you may attach Lightning Greaves to it.\nEquip {0}', {
+  artifact('Lightning Greaves', '{2}', 'Equipped creature has haste and shroud.\nEquip {0}', {
     subtypes: ['Equipment'],
     equip: '{0}',
     statics: [{ kind: 'attached', keywords: ['Haste', 'Shroud'] }],
-    triggers: [
-      {
-        on: 'otherCreatureEtbYours',
-        optional: true,
-        text: 'Attach Lightning Greaves to the new creature.',
-        effect: (ctx) => {
-          if (ctx.event?.t !== 'etb' || !ctx.self) return;
-          const c = ctx.state.cards[ctx.event.card];
-          if (c && c.zone === 'battlefield' && c.controller === ctx.controller) ctx.self.attachedTo = c.id;
-        },
-      },
-    ],
   }),
   artifact('Swiftfoot Boots', '{2}', 'Equipped creature has hexproof and haste.\nEquip {1}', {
     subtypes: ['Equipment'],
