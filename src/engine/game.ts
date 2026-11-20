@@ -11,7 +11,7 @@ import {
   processTriggers, putTriggerOnStack, resolveTop, startTurn,
 } from './rules';
 import {
-  alivePlayers, battlefieldCards, commanderIdentity, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
+  alivePlayers, battlefieldCards, commanderIdentity, defColors, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
   log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot, staticsOf,
 } from './state';
 import type {
@@ -89,9 +89,47 @@ function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, i
   if (ab.cost.life) loseLife(state, pid, ab.cost.life);
 }
 
-function findPayment(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[]) {
+/** Convoke, improvise and delve act like extra mana sources while paying for that one spell. */
+const CONVOKE = -1;
+const IMPROVISE = -2;
+const DELVE = -3;
+
+/** How a spell may be helped to be paid for: its card, and whether to use those helpers before real mana. */
+interface Help {
+  card: CardInstance;
+  first?: boolean;
+}
+
+function helperSources(state: GameState, pid: PlayerId, help: Help | undefined, exclude: CardId[]): ManaSource[] {
+  const kinds = help ? defOf(help.card).costHelp ?? [] : [];
+  if (!help || !kinds.length) return [];
+  const out: ManaSource[] = [];
+  const costly = !help.first;
+  const used = new Set<CardId>([help.card.id, ...exclude]);
+  for (const c of battlefieldCards(state)) {
+    if (c.controller !== pid || c.tapped || used.has(c.id)) continue;
+    if (kinds.includes('convoke') && hasType(c, 'Creature')) {
+      // A creature pays for {1} or one mana of one of its colors.
+      const colors = defColors(defOf(c)) as ManaSym[];
+      out.push({ id: c.id, ability: CONVOKE, produces: [...colors, 'C'], amount: 1, costly });
+      used.add(c.id);
+    } else if (kinds.includes('improvise') && hasType(c, 'Artifact')) {
+      out.push({ id: c.id, ability: IMPROVISE, produces: ['C'], amount: 1, costly });
+      used.add(c.id);
+    }
+  }
+  if (kinds.includes('delve'))
+    for (const id of getPlayer(state, pid).graveyard) if (!used.has(id)) out.push({ id, ability: DELVE, produces: ['C'], amount: 1, costly });
+  return out;
+}
+
+function findPayment(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[], help?: Help) {
   const pool = getPlayer(state, pid).manaPool;
-  const sources = manaSources(state, pid, exclude);
+  let sources = manaSources(state, pid, exclude);
+  const extra = helperSources(state, pid, help, exclude);
+  // "Use convoke/delve first": real mana becomes the fallback.
+  if (help?.first && extra.length) sources = sources.map((s) => ({ ...s, costly: true }));
+  sources = [...sources, ...extra];
   for (const v of costVariants(cost)) {
     const plan = solvePayment(v, pool, sources);
     if (plan) return { plan, cost: v };
@@ -99,21 +137,37 @@ function findPayment(state: GameState, pid: PlayerId, cost: ManaCost, exclude: C
   return null;
 }
 
-function canPay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] = []): boolean {
-  return findPayment(state, pid, cost, exclude) !== null;
+function canPay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] = [], help?: Help): boolean {
+  return findPayment(state, pid, cost, exclude, help) !== null;
 }
 
-function pay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] = []): void {
+function pay(state: GameState, pid: PlayerId, cost: ManaCost, exclude: CardId[] = [], help?: Help): void {
   const p = getPlayer(state, pid);
-  const found = findPayment(state, pid, cost, exclude);
+  const found = findPayment(state, pid, cost, exclude, help);
   if (!found) throw new RulesError('Not enough mana');
-  for (const t of found.plan.taps) activateManaAbility(state, pid, state.cards[t.id], t.ability, t.color);
+  const helped: string[] = [];
+  for (const t of found.plan.taps) {
+    const c = state.cards[t.id];
+    if (t.ability === CONVOKE || t.ability === IMPROVISE) {
+      tapPermanent(state, c);
+      p.manaPool[t.color]++;
+      helped.push(c.def);
+    } else if (t.ability === DELVE) {
+      moveCard(state, c.id, 'exile', { silent: true });
+      p.manaPool[t.color]++;
+      helped.push(c.def);
+    } else activateManaAbility(state, pid, c, t.ability, t.color);
+  }
+  if (helped.length) {
+    const how = (defOf(help!.card).costHelp ?? []).join('/');
+    log(state, `${p.name} ${how === 'delve' ? 'exiles' : 'taps'} ${helped.join(', ')} to help pay (${how}).`);
+  }
   if (!payFromPool(p.manaPool, found.cost)) throw new RulesError('Mana payment failed');
 }
 
 export const HAND_ABILITY = 1000;
 
-function spellCost(state: GameState, card: CardInstance, x: number, variant?: CastVariant): ManaCost {
+function spellCost(state: GameState, card: CardInstance, x: number, variant?: CastVariant, pid: PlayerId = card.owner): ManaCost {
   const def = defOf(card);
   const c = parseCost(variant?.cost ?? def.cost);
   if (variant?.extraCost) {
@@ -124,6 +178,16 @@ function spellCost(state: GameState, card: CardInstance, x: number, variant?: Ca
   if (card.zone === 'command') c.generic += 2 * (getPlayer(state, card.owner).commanderCasts[card.id] ?? 0);
   c.generic += c.x * x;
   c.x = 0;
+  // Cost changes: taxes add generic mana, reductions take it away (never below zero).
+  let delta = -(def.costReduction?.(state, pid) ?? 0);
+  for (const src of battlefieldCards(state)) {
+    for (const st of defOf(src).statics ?? []) {
+      if (st.kind !== 'costMod') continue;
+      const applies = st.whose === 'all' || (st.whose === 'you') === (src.controller === pid);
+      if (applies && matchesFilter(state, card, st.filter, pid, src.id)) delta += st.delta;
+    }
+  }
+  c.generic = Math.max(0, c.generic + delta);
   return c;
 }
 
@@ -229,31 +293,52 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
       if (v.condition && !v.condition(state, pid)) return;
       variants.push({ index, v });
     });
+    const help: Help = { card };
+    const helps = !!def.costHelp?.length;
     for (const { index, v } of variants) {
+      // Extra costs of this way of casting it: life, and a card exiled from hand (Force of Will).
+      const lifeCost = (v?.life ?? 0) + (typeof def.castLife === 'number' ? def.castLife : 0);
+      if (lifeCost > p.life) continue;
+      let vCards = costCards;
+      let vLabel = costLabel;
+      if (v?.exileFromHand) {
+        vCards = p.hand.filter((h) => h !== id && matchesFilter(state, state.cards[h], v.exileFromHand, pid, id));
+        vLabel = 'Exile a card from your hand (cost)';
+        if (!vCards.length) continue;
+      }
       const base = parseCost(v?.cost ?? def.cost);
       let xMax: number | undefined;
       if (base.x > 0) {
         xMax = -1;
-        for (let x = 0; x <= 30; x++) {
-          if (canPay(state, pid, spellCost(state, card, x, v))) xMax = x;
+        // "Pay X life" can't pay more life than you have.
+        const lifeCap = def.castLife === 'X' ? p.life - lifeCost : 30;
+        for (let x = 0; x <= Math.min(30, lifeCap); x++) {
+          if (canPay(state, pid, spellCost(state, card, x, v, pid), [], help)) xMax = x;
           else break;
         }
         if (xMax < 0) continue;
-      } else if (!canPay(state, pid, spellCost(state, card, 0, v))) continue;
-      const extra = { xMax, sacrificeOptions: costCards, sacrificeLabel: costLabel, variant: index };
+      } else if (!canPay(state, pid, spellCost(state, card, 0, v, pid), [], help)) continue;
+      // "As an additional cost, pay X life" picks an X even when the mana cost has none.
+      else if (def.castLife === 'X') xMax = Math.max(0, p.life - lifeCost);
+      const extra = { xMax, sacrificeOptions: vCards, sacrificeLabel: vLabel, variant: index };
       const name = v ? `${def.name} — ${v.label}` : def.name;
+      const push = (a: PlayableAction) => {
+        out.push(a);
+        // Convoke/improvise/delve: also offer paying with those first.
+        if (helps) out.push({ ...a, label: `${a.label} (${def.costHelp!.join('/')} first)`, helpFirst: true });
+      };
       if (def.modes && !v?.effect) {
         for (const combo of modeCombos(def.modes.length, def.modeCount ?? 1)) {
           const targets = specViews(state, combo.flatMap((m) => def.modes![m].targets), pid, id);
           if (!targets) continue;
           const label = `Cast ${name}: ${combo.map((m) => def.modes![m].text.replace(/^•\s*/, '')).join(' + ')}`;
-          out.push({ type: 'cast', cardId: id, label, targets, modes: combo, ...extra });
+          push({ type: 'cast', cardId: id, label, targets, modes: combo, ...extra });
         }
         continue;
       }
       const targets = specViews(state, v?.targets ?? def.targets, pid, id);
       if (!targets) continue;
-      out.push({ type: 'cast', cardId: id, label: `Cast ${name}`, targets, ...extra });
+      push({ type: 'cast', cardId: id, label: `Cast ${name}`, targets, ...extra });
     }
   }
 
@@ -415,7 +500,8 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
   if (action.type === 'cast') {
     const modesKey = (m?: number[]) => (m ?? []).join(',');
     const a = legal.find(
-      (l) => l.type === 'cast' && l.cardId === action.cardId && modesKey(l.modes) === modesKey(action.modes) && l.variant === action.variant,
+      (l) =>
+        l.type === 'cast' && l.cardId === action.cardId && modesKey(l.modes) === modesKey(action.modes) && l.variant === action.variant && !!l.helpFirst === !!action.helpFirst,
     );
     if (!a) throw new RulesError("Can't cast that now");
     const card = state.cards[action.cardId];
@@ -427,11 +513,19 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     }
     const fromCommand = card.zone === 'command';
     const variant = a.variant !== undefined ? def.castVariants![a.variant] : undefined;
-    pay(state, pid, spellCost(state, card, x, variant));
+    pay(state, pid, spellCost(state, card, x, variant, pid), [], { card, first: !!action.helpFirst });
+    const lifeCost = (variant?.life ?? 0) + (def.castLife === 'X' ? x : def.castLife ?? 0);
+    if (lifeCost > 0) {
+      log(state, `${p.name} pays ${lifeCost} life.`);
+      loseLife(state, pid, lifeCost);
+    }
     let sacrificed: Snapshot | undefined;
     if (a.sacrificeOptions) {
       const sc = state.cards[action.sacrifice!];
-      if (def.castDiscard) {
+      if (variant?.exileFromHand) {
+        log(state, `${p.name} exiles ${sc.def} from their hand.`);
+        moveCard(state, sc.id, 'exile', { silent: true });
+      } else if (def.castDiscard) {
         log(state, `${p.name} discards ${sc.def}.`);
         moveCard(state, sc.id, 'graveyard');
       } else {
@@ -956,6 +1050,12 @@ export function run(state: GameState): void {
   for (let guard = 0; guard < 5000; guard++) {
     if (state.phase === 'over') return;
     collectTriggers(state);
+    // Evoke: once its enter triggers are waiting, the creature is sacrificed.
+    for (const c of battlefieldCards(state).filter((x) => x.evoked)) {
+      c.evoked = false;
+      log(state, `${c.def} is sacrificed (evoke).`);
+      moveCard(state, c.id, 'graveyard');
+    }
     if (state.decisions.length) return;
     if (state.phase === 'mulligan') {
       if (state.players.every((p) => p.kept || p.lost)) {

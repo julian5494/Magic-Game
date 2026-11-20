@@ -241,10 +241,23 @@ export type StaticAbility =
   /** "You may play lands from your graveyard." */
   | { kind: 'landsFromGraveyard' }
   /** "You may cast (creature/noncreature...) spells as though they had flash." */
-  | { kind: 'flash'; filter?: CardFilter };
+  | { kind: 'flash'; filter?: CardFilter }
+  /**
+   * Spells cost more or less: "Artifact spells you cast cost {1} less to cast" (delta -1, whose 'you'),
+   * "Noncreature spells your opponents cast cost {1} more" (delta +1, whose 'opponents'). Only generic mana changes.
+   */
+  | { kind: 'costMod'; filter: CardFilter; delta: number; whose: 'you' | 'opponents' | 'all' };
 
 export interface CastVariant {
   label: string;
+  /** Also pay this much life (Force of Will: "pay 1 life and exile a blue card"). */
+  life?: number;
+  /** Also exile a card from your hand matching this (Force of Will's blue card). */
+  exileFromHand?: CardFilter;
+  /** Evoke: when it enters, it's sacrificed. */
+  evoke?: boolean;
+  /** Dash: it has haste and returns to its owner's hand at the beginning of the next end step. */
+  dash?: boolean;
   /** Replaces the mana cost ('{0}' = free). Undefined keeps the normal cost. */
   cost?: string;
   /** Added to the cost (kicker). */
@@ -295,6 +308,12 @@ export interface CardDef {
   cannotCast?: boolean;
   /** Other ways to cast: kicker, flashback, overload, "free if you control a commander", ... */
   castVariants?: CastVariant[];
+  /** This spell costs this much less generic mana ("for each artifact you control", affinity, ...). */
+  costReduction?: (state: GameState, controller: PlayerId) => number;
+  /** Other ways to help pay: convoke (tap creatures), improvise (tap artifacts), delve (exile cards from your graveyard). */
+  costHelp?: ('convoke' | 'improvise' | 'delve')[];
+  /** Additional cost: pay this much life (or X life, for "pay X life"). */
+  castLife?: number | 'X';
   /** Abilities usable while the card is in your hand (cycling); paying includes discarding it. */
   handAbilities?: ActivatedAbility[];
   /** "As an additional cost to cast this spell, discard a card." */

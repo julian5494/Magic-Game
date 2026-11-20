@@ -90,6 +90,10 @@ export interface CardInstance {
   art?: string;
   /** Foil finish and frame treatments of this physical copy (from the imported list). */
   look?: CardLook;
+  /** Cast for its evoke cost: it's sacrificed when it enters. */
+  evoked?: boolean;
+  /** Cast for its dash cost: it has haste and goes back to its owner's hand at the next end step. */
+  dashed?: boolean;
   /** Front-face definition while this card is showing its back face or copying something. */
   frontDef?: string;
   /** May be played from exile by this player until the end of this turn number (impulse draw). */
@@ -311,7 +315,7 @@ export interface GameState {
 export type Action =
   | { type: 'pass' }
   | { type: 'playLand'; cardId: CardId; back?: boolean }
-  | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; modes?: number[]; hold?: boolean; variant?: number }
+  | { type: 'cast'; cardId: CardId; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; modes?: number[]; hold?: boolean; variant?: number; helpFirst?: boolean }
   | { type: 'activate'; cardId: CardId; ability: number; targets?: (Target | null)[]; x?: number; sacrifice?: CardId; color?: ManaSym; hold?: boolean }
   | { type: 'manaTap'; cardId: CardId; ability: number; color?: ManaSym }
   | { type: 'decide'; decisionId: string; answer: DecisionAnswer }
@@ -342,4 +346,6 @@ export interface PlayableAction {
   variant?: number;
   /** Play the back face (modal double-faced lands). */
   back?: boolean;
+  /** Pay with convoke / improvise / delve before using mana (send it back on the cast). */
+  helpFirst?: boolean;
 }

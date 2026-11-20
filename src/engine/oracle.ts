@@ -1913,6 +1913,83 @@ function handleLine(
     def.castVariants = [...(def.castVariants ?? []), { label: `Alternative cost ${km[1].toUpperCase()}`, cost: km[1].toUpperCase(), zone: 'hand' }];
     return true;
   }
+  // ---- Costs: helpers, reductions, alternatives.
+  const helpKw = l.match(/^(convoke|improvise|delve)$/i);
+  if (helpKw) {
+    def.costHelp = [...(def.costHelp ?? []), helpKw[1].toLowerCase() as 'convoke' | 'improvise' | 'delve'];
+    return true;
+  }
+  km = l.match(/^affinity for (\w+?)s?$/i);
+  if (km) {
+    const e = parseCount(`${km[1]} you control`);
+    if (!e) return false;
+    def.costReduction = (state, pid) => e(state, pid, '');
+    return true;
+  }
+  km = l.match(/^(?:this spell|cardname) costs \{(\d+)\} less to cast for each (.+)$/i);
+  if (km) {
+    const e = parseCount(km[2]);
+    if (!e) return false;
+    const per = +km[1];
+    def.costReduction = (state, pid) => per * e(state, pid, '');
+    return true;
+  }
+  km = l.match(/^(?:this spell|cardname) costs \{x\} less to cast, where x is (.+)$/i);
+  if (km) {
+    const e = parseExpr(km[1]);
+    if (!e) return false;
+    def.costReduction = (state, pid) => e(state, pid, '');
+    return true;
+  }
+  // "Artifact spells you cast cost {1} less to cast." / "Noncreature spells your opponents cast cost {1} more to cast."
+  km = l.match(/^(.+?) (you|your opponents|each opponent|players) casts? cost \{(\d+)\} (less|more) to cast$/i);
+  if (km) {
+    const f = spellFilter(km[1].replace(/\s+spells?$/i, ' spells').replace(/^spells$/i, 'spells'));
+    const color = km[1].match(/^(white|blue|black|red|green) spells$/i);
+    const filter: CardFilter | null = color ? { colors: [({ white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' } as const)[color[1].toLowerCase() as 'white']] } : f === 'any' ? {} : f;
+    if (!filter) return false;
+    const whose = /^you$/i.test(km[2]) ? 'you' : /^players$/i.test(km[2]) ? 'all' : 'opponents';
+    def.statics!.push({ kind: 'costMod', filter, delta: (km[4].toLowerCase() === 'less' ? -1 : 1) * +km[3], whose });
+    return true;
+  }
+  km = l.match(/^(noncreature|creature|artifact|enchantment|instant and sorcery)? ?spells cost \{(\d+)\} (less|more) to cast$/i);
+  if (km) {
+    const f = km[1] ? spellFilter(`${km[1]} spells`) : 'any';
+    if (!f) return false;
+    def.statics!.push({ kind: 'costMod', filter: f === 'any' ? {} : f, delta: (km[3].toLowerCase() === 'less' ? -1 : 1) * +km[2], whose: 'all' });
+    return true;
+  }
+  km = l.match(/^(evoke|dash) (\{[0-9WUBRGC]+\}(?:\{[0-9WUBRGC]+\})*)$/i);
+  if (km) {
+    const kind = km[1].toLowerCase();
+    const cost = km[2].toUpperCase();
+    def.castVariants = [...(def.castVariants ?? []), { label: `${kind === 'evoke' ? 'Evoke' : 'Dash'} ${cost}`, cost, zone: 'hand', evoke: kind === 'evoke', dash: kind === 'dash' }];
+    return true;
+  }
+  // Force of Will family: "(If it's not your turn,) you may (pay N life and) exile a blue card from your hand rather than pay this spell's mana cost."
+  km = l.match(/^(if it's not your turn, )?you may (?:pay (\d+) life and )?exile an? (white|blue|black|red|green|nonland)?\s*card from your hand rather than pay this spell's mana cost$/i);
+  if (km) {
+    const col = km[3]?.toLowerCase();
+    const filter: CardFilter = col === 'nonland' ? { nonland: true } : col ? { colors: [({ white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' } as const)[col as 'white']] } : {};
+    const notYourTurn = !!km[1];
+    def.castVariants = [
+      ...(def.castVariants ?? []),
+      {
+        label: `Exile a ${col ?? ''} card${km[2] ? ` and pay ${km[2]} life` : ''} instead`.replace('  ', ' '),
+        cost: '{0}',
+        zone: 'hand',
+        life: km[2] ? +km[2] : undefined,
+        exileFromHand: filter,
+        condition: notYourTurn ? (state, pid) => state.activePlayer !== pid : undefined,
+      },
+    ];
+    return true;
+  }
+  km = l.match(/^as an additional cost to cast this spell, pay (\d+|x) life$/i);
+  if (km) {
+    def.castLife = /x/i.test(km[1]) ? 'X' : +km[1];
+    return true;
+  }
   if (/^as an additional cost to cast this spell, discard a card$/i.test(l)) {
     def.castDiscard = 1;
     return true;

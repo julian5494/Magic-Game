@@ -123,6 +123,8 @@ export function moveCard(
   card.sick = true;
   card.skipUntap = 0;
   card.eotControlOf = null;
+  card.evoked = false;
+  card.dashed = false;
   if (to !== 'stack') card.x = undefined;
   if (from === 'battlefield') card.linked = [];
   card.controller = to === 'battlefield' || to === 'stack' ? opts.controller ?? card.owner : card.owner;

@@ -153,6 +153,7 @@ export function getPT(state: GameState, card: CardInstance): { power: number; to
 export function getKeywords(state: GameState, card: CardInstance): Keyword[] {
   const def = defOf(card);
   const set = new Set<Keyword>([...(def.keywords ?? []), ...card.temp.keywords, ...staticMods(state, card).keywords]);
+  if (card.dashed) set.add('Haste');
   return [...set];
 }
 

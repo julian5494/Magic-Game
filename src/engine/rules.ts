@@ -346,6 +346,8 @@ export function resolveTop(state: GameState): void {
     if (isPermanent) {
       const isAura = (def.subtypes ?? []).includes('Aura');
       moveCard(state, card.id, 'battlefield', { controller: item.controller });
+      if (variant?.evoke) card.evoked = true;
+      if (variant?.dash) card.dashed = true;
       if (isAura) {
         const t = targets[0];
         if (t && t.type === 'card') card.attachedTo = t.id;
@@ -575,6 +577,13 @@ function enterStep(state: GameState, step: Step): void {
     case 'end':
       pushEvent(state, { t: 'step', step, active: ap });
       if (step === 'end' && state.monarch === ap) drawCards(state, ap, 1);
+      if (step === 'end') {
+        // Dash: back to its owner's hand at the beginning of the end step.
+        for (const c of battlefieldCards(state).filter((x) => x.dashed)) {
+          log(state, `${c.def} returns to its owner's hand (dash).`);
+          moveCard(state, c.id, 'hand');
+        }
+      }
       state.priority = ap;
       return;
     case 'draw':

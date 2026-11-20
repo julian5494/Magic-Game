@@ -236,7 +236,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
 
   const finishPending = (p: Pending) => {
     const a = p.action;
-    if (a.type === 'cast') act({ type: 'cast', cardId: a.cardId, targets: p.targets, x: p.x, sacrifice: p.sacrifice, modes: a.modes, hold });
+    if (a.type === 'cast') act({ type: 'cast', cardId: a.cardId, targets: p.targets, x: p.x, sacrifice: p.sacrifice, modes: a.modes, variant: a.variant, helpFirst: a.helpFirst, hold });
     else if (a.type === 'activate') {
       act({ type: 'activate', cardId: a.cardId, ability: a.ability!, targets: p.targets, x: p.x, sacrifice: p.sacrifice, color: p.color, hold: a.isMana ? undefined : hold });
     }
@@ -411,7 +411,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       if (t.type !== 'area') {
         const a = directCast(d.id, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id })!;
         const full = a.targets[0].options.find((o) => sameTarget(o, t.type === 'card' ? { type: 'card', id: t.id } : { type: 'player', id: t.id }))!;
-        act({ type: 'cast', cardId: d.id, targets: [full], modes: a.modes, variant: a.variant, hold });
+        act({ type: 'cast', cardId: d.id, targets: [full], modes: a.modes, variant: a.variant, helpFirst: a.helpFirst, hold });
       } else openMenu(d.id);
       return;
     }
@@ -498,7 +498,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const a = t ? directCast(d.id, t) : undefined;
     if (a && t) {
       const full = a.targets[0].options.find((o) => sameTarget(o, t))!;
-      act({ type: 'cast', cardId: d.id, targets: [full], modes: a.modes, variant: a.variant, hold });
+      act({ type: 'cast', cardId: d.id, targets: [full], modes: a.modes, variant: a.variant, helpFirst: a.helpFirst, hold });
       return;
     }
     playFromHand(d.id);
