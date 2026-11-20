@@ -66,7 +66,7 @@ export function manaSources(state: GameState, pid: PlayerId, exclude: CardId[] =
         id: c.id,
         ability: i,
         produces: abilityColors(state, pid, ab),
-        amount: ab.mana.amount ?? 1,
+        amount: ab.mana.count ? ab.mana.count(state, pid) : ab.mana.amount ?? 1,
         costly: !!ab.cost.sacrificeSelf || !!ab.mana.pain || !!ab.cost.life,
         fixed: ab.mana.fixed,
       });
@@ -84,7 +84,7 @@ function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, i
   if (ab.cost.sacrificeSelf) moveCard(state, c.id, 'graveyard');
   const pool = getPlayer(state, pid).manaPool;
   if (ab.mana!.fixed) for (const s of ab.mana!.fixed) pool[s]++;
-  else pool[sym] += ab.mana!.amount ?? 1;
+  else pool[sym] += ab.mana!.count ? ab.mana!.count(state, pid) : ab.mana!.amount ?? 1;
   if (ab.mana!.pain) loseLife(state, pid, ab.mana!.pain);
   if (ab.cost.life) loseLife(state, pid, ab.cost.life);
 }
@@ -620,7 +620,7 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       const colors = abilityColors(state, pid, ab);
       const sym = action.color && colors.includes(action.color) ? action.color : colors[0];
       if (ab.mana.fixed) for (const s of ab.mana.fixed) p.manaPool[s]++;
-      else p.manaPool[sym] += ab.mana.amount ?? 1;
+      else p.manaPool[sym] += ab.mana.count ? ab.mana.count(state, pid) : ab.mana.amount ?? 1;
       if (ab.mana.pain) loseLife(state, pid, ab.mana.pain);
       return;
     }

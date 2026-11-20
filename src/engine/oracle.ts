@@ -1294,6 +1294,12 @@ function parseManaProduction(s: string): ActivatedAbility['mana'] | null {
   if (/^add one mana of any color in your commander's color identity$/i.test(t)) return { colors: 'identity' };
   if (/^add one mana of any (?:color|type) that a land (?:you control|an opponent controls) could produce$/i.test(t)) return { colors: 'identity' };
   if (/^add two mana of any one color$/i.test(t)) return { colors: 'any', amount: 2 };
+  // "Add {G} for each creature you control." (Gaea's Cradle, Cabal Coffers...)
+  m = t.match(/^add \{([WUBRGC])\} for each (.+)$/i);
+  if (m) {
+    const e = parseCount(m[2]);
+    if (e) return { colors: [m[1].toUpperCase() as ManaSym], count: (state, pid) => e(state, pid, '') };
+  }
   return null;
 }
 

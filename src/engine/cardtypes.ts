@@ -135,6 +135,8 @@ export type Effect = (ctx: Ctx) => void;
 export interface ManaAbilityDef {
   colors: ManaSym[] | 'any' | 'identity';
   amount?: number;
+  /** How much it makes, when that depends on the game (Gaea's Cradle: one per creature you control). */
+  count?: (state: GameState, controller: PlayerId) => number;
   /** Produces exactly these symbols together (eg. bounce lands: {R}{W}). Overrides colors/amount. */
   fixed?: ManaSym[];
   /** Life lost when this ability is used (painlands). */

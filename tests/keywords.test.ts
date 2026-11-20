@@ -17,6 +17,7 @@ const PERSIST = card({ name: 'Test Persister', mana_cost: '{2}{B}', type_line: '
 const ANNIHILATOR = card({ name: 'Test Annihilator', mana_cost: '{4}', type_line: 'Creature — Eldrazi', power: '5', toughness: '5', oracle_text: 'Annihilator 2' });
 const GROVE = card({ name: 'Test Grove', type_line: 'Land', oracle_text: '{T}: Add {C}.\n{G/U}, {T}: Add {G}{G}, {G}{U}, or {U}{U}.' });
 const GRIP = card({ name: 'Test Grip', mana_cost: '{2}{G}', type_line: 'Instant', oracle_text: 'Split second\nDestroy target artifact or enchantment.' });
+const CRADLE = card({ name: 'Test Cradle', type_line: 'Legendary Land', oracle_text: '{T}: Add {G} for each creature you control.' });
 const WILL = card({ name: 'Test Will', mana_cost: '{2}{R}', type_line: 'Sorcery', oracle_text: 'Choose one. If you control a commander as you cast this spell, you may choose both instead.\n• You gain 3 life.\n• Draw a card.' });
 
 describe('keywords and rules text', () => {
@@ -100,5 +101,14 @@ describe('keywords and rules text', () => {
     expect(both()).toBe(false);
     put(s, A, 'Grizzly Bears').commander = true;
     expect(both()).toBe(true);
+  });
+
+  it("Gaea's Cradle makes one mana per creature", () => {
+    let { s, A } = setup('simic');
+    const cradle = put(s, A, CRADLE);
+    for (let i = 0; i < 3; i++) put(s, A, 'Grizzly Bears');
+    const tap = legalActions(s, A).find((a) => a.cardId === cradle.id)!;
+    s = act(s, A, { type: 'manaTap', cardId: cradle.id, ability: tap.ability! });
+    expect(P(s, A).manaPool.G).toBe(3);
   });
 });
