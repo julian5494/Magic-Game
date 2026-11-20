@@ -699,6 +699,22 @@ const SENTENCES: SentenceParser[] = [
     if (!kind) return null;
     return action(m[3], kind === '+1/+1' ? 'self' : 'opponent', (ctx, id) => ctx.addCounters(id, kind, val(n, ctx)));
   },
+  // Other kinds of counters: "put a luck counter on CARDNAME", "remove a fuse counter from CARDNAME".
+  (s) => {
+    const m = s.match(/^(put|remove) (\w+) ([a-z]+) counters? (?:on|from) cardname$/i);
+    if (!m) return null;
+    const n = num(m[2]);
+    if (n === null) return null;
+    const kind = m[3].toLowerCase();
+    const sign = m[1].toLowerCase() === 'put' ? 1 : -1;
+    return {
+      targets: [],
+      run: (ctx) => {
+        if (!ctx.self) return;
+        ctx.self.counters[kind] = Math.max(0, (ctx.self.counters[kind] ?? 0) + sign * val(n, ctx));
+      },
+    };
+  },
   // Search library
   (s) => {
     const mm = s.match(/^(?:(its controller|that player|THATPLAYER|target player) (?:may )?searches? their|(?:you may )?search your) library for (.+? cards?)(?: with different names)?, (.+)$/i);
@@ -818,6 +834,49 @@ const SENTENCES: SentenceParser[] = [
           if (who) ctx.draw(who, 1);
         },
       };
+    return null;
+  },
+  (s) => {
+    if (/^double cardname's power and toughness until end of turn$/i.test(s))
+      return { targets: [], run: (ctx) => ctx.self && ctx.pump(ctx.self, ctx.power(ctx.self), ctx.toughness(ctx.self)) };
+    if (/^take an extra turn after this one$/i.test(s)) return { targets: [], run: (ctx) => ctx.extraTurn(ctx.controller) };
+    if (/^you win the game$/i.test(s)) return { targets: [], run: (ctx) => ctx.winGame(ctx.controller) };
+    // The spell that triggered this (Krark): send it back, or copy it.
+    if (/^return that spell to its owner's hand$/i.test(s))
+      return {
+        targets: [],
+        run: (ctx) => {
+          const card = ctx.event?.t === 'cast' ? ctx.event.card : null;
+          const i = ctx.state.stack.findIndex((it) => it.cardId === card && it.kind === 'spell' && !it.isCopy);
+          if (i < 0 || !card) return;
+          ctx.state.stack.splice(i, 1);
+          ctx.moveCard(card, 'hand');
+        },
+      };
+    if (/^copy that spell(?:, and you may choose new targets for the copy)?$/i.test(s))
+      return {
+        targets: [],
+        run: (ctx) => {
+          const card = ctx.event?.t === 'cast' ? ctx.event.card : null;
+          const it = ctx.state.stack.find((x) => x.cardId === card && x.kind === 'spell' && !x.isCopy);
+          if (it) ctx.copySpell(it.id);
+        },
+      };
+    // "If CARDNAME has ten or more luck counters on it, you win the game." / "If you control ten or more Treasures, ..."
+    let m = s.match(/^if cardname has (\w+) or more (\S+) counters on it, you win the game$/i);
+    if (m) {
+      const n = NUMS[m[1].toLowerCase()] ?? (m[1].toLowerCase() === 'ten' ? 10 : m[1].toLowerCase() === 'twenty' ? 20 : Number(m[1]));
+      const kind = m[2].toLowerCase();
+      return { targets: [], run: (ctx) => { if ((ctx.self?.counters[kind] ?? 0) >= n) ctx.winGame(ctx.controller); } };
+    }
+    m = s.match(/^if you control (\w+) or more (.+?), you win the game$/i);
+    if (m) {
+      const n = NUMS[m[1].toLowerCase()] ?? (m[1].toLowerCase() === 'ten' ? 10 : m[1].toLowerCase() === 'twenty' ? 20 : Number(m[1]));
+      const o = parseNouns(m[2]);
+      if (!o || !n) return null;
+      const filter: CardFilter = { ...o.filter, types: o.types, controller: 'you' };
+      return { targets: [], run: (ctx) => { if (ctx.permanents(filter).length >= n) ctx.winGame(ctx.controller); } };
+    }
     return null;
   },
   // Explore.
@@ -1176,6 +1235,50 @@ function parseSentence(raw: string): Piece[] | null {
   return null;
 }
 
+type Parsed = { targets: TargetSpec[]; effect: (ctx: Ctx) => void };
+
+/**
+ * Coin flips: "Flip a coin. If you win the flip, A. If you lose the flip, B." (either order, either half optional),
+ * "Flip a coin until you lose a flip.", "Flip N coins. For each flip you win, A."
+ * Returns undefined when the text isn't a coin flip, null when it is but a part can't be parsed.
+ */
+function parseFlip(text: string, def: CardDef, key: string, offset: number): Parsed | null | undefined {
+  const t = text.trim().replace(/\.$/, '');
+  const sub = (s: string | undefined, k: string, off: number): Parsed | null => (s ? parseEffect(s, def, `${key}:${k}`, off) : { targets: [], effect: () => {} });
+  let m = t.match(/^flip a coin\. (?:if you (win|lose) the flip, ([^.]+))(?:\. if you (win|lose) the flip, ([^.]+))?$/i);
+  if (m) {
+    const winText = m[1].toLowerCase() === 'win' ? m[2] : m[3]?.toLowerCase() === 'win' ? m[4] : undefined;
+    const loseText = m[1].toLowerCase() === 'lose' ? m[2] : m[3]?.toLowerCase() === 'lose' ? m[4] : undefined;
+    const win = sub(winText, 'win', offset);
+    if (!win) return null;
+    const lose = sub(loseText, 'lose', offset + win.targets.length);
+    if (!lose) return null;
+    return {
+      targets: [...win.targets, ...lose.targets],
+      effect: (ctx) => (ctx.flipCoin(ctx.controller) ? win.effect(ctx) : lose.effect(ctx)),
+    };
+  }
+  if (/^flip a coin$/i.test(t)) return { targets: [], effect: (ctx) => void ctx.flipCoin(ctx.controller) };
+  if (/^flip a coin until you lose a flip$/i.test(t))
+    return { targets: [], effect: (ctx) => { for (let i = 0; i < 50 && ctx.flipCoin(ctx.controller); i++); } };
+  m = t.match(/^flip (\w+) coins\. (?:for each flip you win|for each coin that comes up heads), ([^.]+)$/i) ?? t.match(/^flip (\w+) coins\. ([^.]+) for each (?:flip you win|coin that comes up heads)$/i);
+  if (m) {
+    const n = NUMS[m[1].toLowerCase()] ?? Number(m[1]);
+    const each = sub(m[2], 'each', offset);
+    if (!n || !each) return null;
+    return {
+      targets: each.targets,
+      effect: (ctx) => {
+        let wins = 0;
+        for (let i = 0; i < n; i++) if (ctx.flipCoin(ctx.controller)) wins++;
+        for (let i = 0; i < wins; i++) each.effect(ctx);
+      },
+    };
+  }
+  if (/^flip/i.test(t)) return null;
+  return undefined;
+}
+
 /** Parse an effect paragraph into targets + effect. Registers continuations on `def.handlers`. */
 function normalizeMulti(text: string): string {
   text = text.replace(
@@ -1234,6 +1337,8 @@ function note(map: Map<string, number>, s: string) {
 }
 
 function parseEffect(text: string, def: CardDef, key: string, offset = 0): { targets: TargetSpec[]; effect: (ctx: Ctx) => void } | null {
+  const flip = parseFlip(text, def, key, offset);
+  if (flip !== undefined) return flip;
   const sentences = normalizeMulti(text).trim().replace(/\.$/, '').split(/\.\s+/);
   const pieces: Piece[] = [];
   for (const s of sentences) {
@@ -1332,6 +1437,9 @@ function parseTrigger(cond: string): TrigSpec[] | null {
   const c = cond.toLowerCase().replace(/ the battlefield/g, '');
   const map: [RegExp, TriggerOn][] = [
     [/^when(ever)? cardname enters$/, 'etb'],
+    [/^whenever you win a coin flip$/, 'youWinFlip'],
+    [/^whenever you lose a coin flip$/, 'youLoseFlip'],
+    [/^whenever a player wins a coin flip$/, 'anyWinsFlip'],
     [/^when(ever)? cardname dies$/, 'dies'],
     [/^when(ever)? cardname is put into a graveyard from$/, 'toGraveyardFromBattlefield'],
     [/^when(ever)? cardname leaves$/, 'leaves'],
@@ -1515,6 +1623,8 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
   }
   if (/^enchanted creature can't attack or block$/i.test(l)) return { statics: [{ kind: 'attached', cantAttackOrBlock: true }] };
   if (/^you have no maximum hand size$/i.test(l)) return { statics: [{ kind: 'noMaxHandSize' }] };
+  if (/^if you would flip a coin, instead flip two coins and ignore one$/i.test(l)) return { statics: [{ kind: 'thumb' }] };
+  if (/^the first time you flip one or more coins each turn, those coins come up heads and you win those flips$/i.test(l)) return { statics: [{ kind: 'firstFlipWins' }] };
   // The top of your library, and playing from other zones.
   if (/^you may look at the top card of your library (?:at )?any time$/i.test(l)) return { statics: [{ kind: 'lookTop' }] };
   if (/^play with the top card of your library revealed$/i.test(l)) return { statics: [{ kind: 'revealTop' }] };

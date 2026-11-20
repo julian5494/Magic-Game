@@ -143,6 +143,8 @@ export interface Player {
   passUntilTurn: number | null;
   /** Steps auto-pass stops at (when there's something you could do). */
   stops?: Stops;
+  /** Turn of this player's last coin flip (Edgar: the first flips each turn win). */
+  flipTurn?: number;
   lifeGainedThisTurn: number;
   /** Extra land drops granted this turn ("You may play an additional land this turn"). */
   extraLandsThisTurn?: number;
@@ -202,7 +204,8 @@ export type GameEvent =
   | { t: 'tapped'; card: CardId }
   | { t: 'draw'; player: PlayerId }
   | { t: 'discard'; player: PlayerId; card: CardId }
-  | { t: 'attackDeclared'; player: PlayerId; count: number };
+  | { t: 'attackDeclared'; player: PlayerId; count: number }
+  | { t: 'coinFlip'; player: PlayerId; won: boolean };
 
 export interface PendingTrigger {
   source: CardId;
@@ -305,6 +308,8 @@ export interface GameState {
   continuations?: { ctx: any; key: string }[];
   /** Fog: combat damage is prevented during this turn. */
   fogTurn?: number;
+  /** Extra turns to take, next first. */
+  extraTurns?: PlayerId[];
   log: LogEntry[];
   seed: number;
   nextId: number;

@@ -223,6 +223,30 @@ export function drawCards(state: GameState, pid: PlayerId, n: number): void {
   if (p.drewFromEmpty) log(state, `${p.name} tried to draw from an empty library.`);
 }
 
+/** Lets ops end the game without importing the rules module (set by rules at load). */
+export let playerLosesRef: (state: GameState, pid: PlayerId, reason: string) => void = () => {};
+export function setPlayerLoses(f: typeof playerLosesRef): void {
+  playerLosesRef = f;
+}
+
+/** Flip a coin for a player (Krark's Thumb flips two and keeps a win; Edgar's first flips each turn win). */
+export function flipCoin(state: GameState, pid: PlayerId): boolean {
+  const p = getPlayer(state, pid);
+  const mine = battlefieldCards(state).filter((c) => c.controller === pid).flatMap((c) => defOf(c).statics ?? []);
+  const firstThisTurn = p.flipTurn !== state.turn;
+  p.flipTurn = state.turn;
+  let won: boolean;
+  if (firstThisTurn && mine.some((st) => st.kind === 'firstFlipWins')) won = true;
+  else {
+    const flips = mine.some((st) => st.kind === 'thumb') ? 2 : 1;
+    won = false;
+    for (let i = 0; i < flips; i++) if (random(state) < 0.5) won = true;
+  }
+  log(state, `${p.name} flips a coin and ${won ? 'wins' : 'loses'}.`);
+  pushEvent(state, { t: 'coinFlip', player: pid, won });
+  return won;
+}
+
 export function gainLife(state: GameState, pid: PlayerId, n: number): void {
   if (n <= 0) return;
   // Life-doubling effects stack (each one doubles again).
@@ -817,6 +841,15 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
     },
     chooseOption(p, prompt, options, key, data) {
       queueDecision(state, { player: p, kind: 'chooseOption', prompt, options, handler: 'card', data: { ctx: cardData, key, extra: data } });
+    },
+    flipCoin: (p) => flipCoin(state, p),
+    extraTurn(p) {
+      (state.extraTurns ??= []).unshift(p);
+      log(state, `${getPlayer(state, p).name} will take an extra turn.`);
+    },
+    winGame(p) {
+      log(state, `${getPlayer(state, p).name} wins the game!`);
+      for (const q of state.players) if (q.id !== p && !q.lost) playerLosesRef(state, q.id, `${getPlayer(state, p).name} won the game`);
     },
     defer(key) {
       (state.continuations ??= []).push({ ctx: cardData, key });

@@ -126,6 +126,12 @@ export interface Ctx {
   /** Ask a yes/no or multiple-choice question, continue in def.handlers[key]. */
   chooseOption(player: PlayerId, prompt: string, options: { id: string; label: string }[], key: string, data?: any): void;
   chooseCards(player: PlayerId, prompt: string, cards: CardId[], min: number, max: number, key: string, data?: any, privateCards?: boolean): void;
+  /** Flip a coin for a player; true if they win. */
+  flipCoin(player: PlayerId): boolean;
+  /** Take an extra turn after this one. */
+  extraTurn(player: PlayerId): void;
+  /** The player wins the game. */
+  winGame(player: PlayerId): void;
   /** Continue in def.handlers[key] once every pending choice has been made. */
   defer(key: string): void;
 }
@@ -211,7 +217,10 @@ export type TriggerOn =
   | 'equippedCreatureDealsCombatDamageToPlayer'
   | 'enchantedCreatureAttacks'
   | 'anyEtb' // any permanent enters (use `condition` to narrow)
-  | 'anyDies'; // any creature dies (use `condition` to narrow)
+  | 'anyDies' // any creature dies (use `condition` to narrow)
+  | 'youWinFlip'
+  | 'youLoseFlip'
+  | 'anyWinsFlip';
 
 export interface TriggeredAbility {
   on: TriggerOn;
@@ -252,7 +261,11 @@ export type StaticAbility =
   /** Doubling Season / Parallel Lives: your tokens are created twice over. */
   | { kind: 'tokenDouble' }
   /** Boon Reflection: you gain twice as much life. */
-  | { kind: 'lifeDouble' };
+  | { kind: 'lifeDouble' }
+  /** Krark's Thumb: flip two coins and keep the one you like. */
+  | { kind: 'thumb' }
+  /** Edgar: the first coin flips each turn come up heads (you win). */
+  | { kind: 'firstFlipWins' };
 
 export interface CastVariant {
   label: string;

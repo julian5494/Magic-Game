@@ -1,6 +1,6 @@
 import type { TriggeredAbility } from './cardtypes';
 import {
-  createToken, dealDamage, drawCards, isStillLegal, legalTargets, makeCtx, moveCard, pushEvent, queueDecision,
+  createToken, dealDamage, drawCards, isStillLegal, legalTargets, makeCtx, moveCard, pushEvent, queueDecision, setPlayerLoses,
 } from './ops';
 import { emptyPool } from './mana';
 import { getDef } from './registry';
@@ -186,6 +186,15 @@ function eventMatches(
       break;
     case 'enchantedCreatureAttacks':
       ok = e.t === 'attacks' && self.attachedTo === e.card;
+      break;
+    case 'youWinFlip':
+      ok = e.t === 'coinFlip' && e.won && e.player === self.controller;
+      break;
+    case 'youLoseFlip':
+      ok = e.t === 'coinFlip' && !e.won && e.player === self.controller;
+      break;
+    case 'anyWinsFlip':
+      ok = e.t === 'coinFlip' && e.won;
       break;
     case 'anyDies':
       ok = e.t === 'leaves' && e.to === 'graveyard' && isCreatureSnap(e.snap);
@@ -456,6 +465,8 @@ export function playerLoses(state: GameState, pid: PlayerId, reason: string): vo
 }
 
 /** Perform state-based actions once. Returns true if anything happened. */
+setPlayerLoses(playerLoses);
+
 export function checkStateBased(state: GameState): boolean {
   let changed = false;
   for (const p of alivePlayers(state)) {
@@ -698,7 +709,10 @@ export function finishCleanup(state: GameState): void {
 
 export function advanceStep(state: GameState): void {
   if (state.step === 'cleanup') {
-    startTurn(state, nextPlayer(state, state.activePlayer));
+    // Extra turns come first (only for players still in the game).
+    while (state.extraTurns?.length && getPlayer(state, state.extraTurns[0]).lost) state.extraTurns.shift();
+    const extra = state.extraTurns?.shift();
+    startTurn(state, extra ?? nextPlayer(state, state.activePlayer));
     return;
   }
   let next = STEP_ORDER[STEP_ORDER.indexOf(state.step) + 1];
