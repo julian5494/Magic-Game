@@ -12,6 +12,7 @@ import { trackFoilPointer } from '../foil';
 import { useGameSounds } from '../gameSounds';
 import { sound } from '../sound';
 import { artUrl, Battlefield, MatPicker, SEAT_COLORS, useMats, type PermProps, type PreviewMark } from './Board';
+import { FxLayer } from './FxLayer';
 import { Card, CardPreview, IMAGES_KEY, imagesEnabled, ManaText } from './Card';
 import { DecisionModal, LogPanel, nameOfPlayer, PhaseTracker, StackPanel, STEP_LABELS, XModal, ZoneModal, type ZoneOpen } from './parts';
 import { CmdDamage, CommandSlot, D20, ManaBar, MatPiles, Portrait } from './Seats';
@@ -1202,6 +1203,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         </div>
       )}
       <ArrowLayer arrows={arrows} />
+      <FxLayer view={view} calm={calm} />
 
       {hover && !drag && !aiming && (
         <div className={`preview-wrap side-${previewSide}`}>

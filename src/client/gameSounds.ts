@@ -20,6 +20,8 @@ const counterTotal = (c: { counters: Record<string, number> }) => Object.values(
 
 export function soundsFor(prev: GameView | null, next: GameView): Cue[] {
   if (!prev || prev.you !== next.you) return [];
+  // A different game (the log started over): nothing to animate.
+  if (next.log.length < prev.log.length && prev.log.length < 400) return [];
   const out: Cue[] = [];
   const you = next.you;
   const seats = next.players.map((p) => p.id);

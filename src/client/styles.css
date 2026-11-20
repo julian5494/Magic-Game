@@ -957,3 +957,94 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .focus-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 46; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-radius: 12px;
   font: 600 13px Inter, sans-serif; color: #f0dcb4; background: #1e140cf0; box-shadow: 0 0 0 1px #000, 0 0 0 2px var(--seat, #d4a650), 0 10px 26px #000a; }
 .focus-banner strong { font-family: Cinzel, Georgia, serif; color: #ffd98a; }
+
+/* =====================================================================
+   Spell and combat animations (FxLayer). Fixed over the whole screen, never catching the pointer.
+   ===================================================================== */
+.fx-layer { position: fixed; inset: 0; pointer-events: none; z-index: 44; overflow: hidden; }
+.fx-layer > * { position: absolute; pointer-events: none; }
+
+/* Fire bolt: a glowing orb flies to the target, then bursts. */
+.fx-bolt { width: 0; height: 0; animation: boltFly .42s cubic-bezier(.5, 0, .9, .6) forwards; }
+.fx-bolt .core { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 25%, var(--fx) 45%, transparent 72%); box-shadow: 0 0 18px 8px var(--fx), 0 0 40px 12px color-mix(in srgb, var(--fx) 50%, transparent); }
+.fx-bolt .core::after { content: ''; position: absolute; left: 50%; top: 50%; width: 70px; height: 8px; transform-origin: 0 50%; border-radius: 4px;
+  transform: translateY(-50%) rotate(calc(atan2(var(--dy), var(--dx)) + 180deg)); background: linear-gradient(90deg, var(--fx), transparent); filter: blur(2px); }
+@keyframes boltFly { 0% { transform: translate(0, 0) scale(.6); opacity: 0; } 12% { opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(1.1); opacity: 1; } 101% { opacity: 0; } }
+.fx-burst { width: 0; height: 0; opacity: 0; animation: fxShow .5s .4s forwards; }
+.fx-burst::before { content: ''; position: absolute; left: -60px; top: -60px; width: 120px; height: 120px; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 12%, var(--fx) 30%, transparent 65%); animation: burstFlash .5s .4s ease-out forwards; transform: scale(.2); }
+.fx-burst i { position: absolute; left: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 8px 3px var(--fx);
+  transform: rotate(var(--a)) translateX(0); animation: spark .55s .4s ease-out forwards; }
+@keyframes fxShow { to { opacity: 1; } }
+@keyframes burstFlash { 0% { transform: scale(.2); opacity: 1; } 100% { transform: scale(1.3); opacity: 0; } }
+@keyframes spark { 0% { transform: rotate(var(--a)) translateX(0); opacity: 1; } 100% { transform: rotate(var(--a)) translateX(70px); opacity: 0; } }
+
+/* Destroyed: a dark sigil slams down and the card shatters. */
+.fx-shatter .sigil { position: absolute; inset: -20%; border-radius: 50%; border: 3px solid var(--fx); box-shadow: 0 0 20px var(--fx), inset 0 0 20px var(--fx);
+  animation: sigil .5s ease-out forwards; }
+@keyframes sigil { 0% { transform: scale(1.6); opacity: 0; } 40% { transform: scale(.9); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
+.fx-shatter .shard { position: absolute; background-color: #2a1c2e; box-shadow: 0 0 6px #000a; clip-path: polygon(6% 0, 100% 8%, 92% 100%, 0 88%);
+  animation: shard .9s .2s cubic-bezier(.3, .1, .6, 1) forwards; }
+.fx-shatter .shard:nth-child(odd) { clip-path: polygon(0 10%, 88% 0, 100% 94%, 12% 100%); }
+@keyframes shard { 0% { transform: none; opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) rotate(var(--r)); opacity: 0; } }
+
+/* Dies: the card drains of colour and crumbles to embers. Exiled: it dissolves into light. */
+.fx-crumble .ghost, .fx-exile .ghost { position: absolute; inset: 0; border-radius: 6px; background: #3a2a1c center / cover; }
+.fx-crumble .ghost { animation: crumble 1s ease-in forwards; }
+@keyframes crumble { 0% { filter: none; opacity: 1; transform: none; } 40% { filter: grayscale(1) brightness(.6); } 100% { filter: grayscale(1) brightness(.2); opacity: 0; transform: translateY(14px) scale(.92); } }
+.fx-exile .ghost { animation: exileFade 1.1s ease-out forwards; }
+@keyframes exileFade { 0% { filter: none; opacity: 1; } 50% { filter: brightness(2.2) blur(1px); opacity: .9; } 100% { filter: brightness(3) blur(4px); opacity: 0; transform: scale(1.06); } }
+.fx-crumble .mote, .fx-exile .mote { position: absolute; bottom: 20%; width: 4px; height: 4px; border-radius: 50%; opacity: 0; animation: moteUp 1s var(--d) ease-out forwards; }
+.fx-crumble .mote { background: #ff9a3a; box-shadow: 0 0 6px #ff6a1a; }
+.fx-exile .mote { background: #fff; box-shadow: 0 0 8px #cfe8ff; }
+@keyframes moteUp { 0% { opacity: 0; transform: translate(0, 0); } 20% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--x), -90px); } }
+
+/* Board wipe: a shockwave rolls out across the table. */
+.fx-wipe { inset: 0; }
+.fx-wipe .ring { position: absolute; left: 50%; top: 52%; width: 40px; height: 24px; margin: -12px 0 0 -20px; border-radius: 50%; border: 6px solid var(--fx);
+  box-shadow: 0 0 30px 10px var(--fx), inset 0 0 30px 6px var(--fx); animation: wave 1.1s cubic-bezier(.2, .6, .3, 1) forwards; }
+@keyframes wave { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(60, 40); opacity: 0; border-width: 1px; } }
+.fx-wipe .flash { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 52%, color-mix(in srgb, var(--fx) 45%, transparent), transparent 70%); animation: wipeFlash .8s ease-out forwards; }
+@keyframes wipeFlash { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Countered: a blue rune closes over the spell and breaks like glass. */
+.fx-counter { width: 120px; height: 120px; margin: -60px 0 0 -60px; animation: counterRune .8s ease-out forwards; }
+.fx-counter svg { width: 100%; height: 100%; fill: none; stroke: #7fd4ff; stroke-width: 3; filter: drop-shadow(0 0 6px #4ab8ff) drop-shadow(0 0 14px #2a8aff); }
+.fx-counter .inner { stroke-dasharray: 6 5; }
+.fx-counter path { fill: #7fd4ff44; }
+@keyframes counterRune { 0% { transform: scale(1.8) rotate(-40deg); opacity: 0; } 35% { transform: scale(1) rotate(0); opacity: 1; } 70% { transform: scale(1.05); opacity: 1; filter: none; } 100% { transform: scale(1.5); opacity: 0; filter: blur(3px); } }
+
+/* Drain: wisps flow from the losers' life dice into the gainer's. */
+.fx-wisp { left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: radial-gradient(circle, #fff 0 20%, var(--fx) 50%, transparent 72%);
+  box-shadow: 0 0 12px 4px var(--fx); offset-rotate: 0deg; offset-distance: 0%; opacity: 0; animation: wisp .9s ease-in-out forwards; }
+@keyframes wisp { 0% { offset-distance: 0%; opacity: 0; } 15% { opacity: 1; } 100% { offset-distance: 100%; opacity: .8; } }
+.fx-sparkle { width: 0; height: 0; }
+.fx-sparkle i { position: absolute; left: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: #fff7d0; box-shadow: 0 0 8px 3px var(--fx); opacity: 0;
+  animation: spark .7s ease-out forwards; }
+.fx-sparkle.up i { animation-name: sparkUp; }
+@keyframes sparkUp { 0% { transform: rotate(var(--a)) translateX(4px); opacity: 0; } 30% { opacity: 1; } 100% { transform: rotate(var(--a)) translateX(36px) translateY(-30px); opacity: 0; } }
+
+/* Your commander arrives: a pillar of light and a ring on the table. */
+.fx-pillar { width: 0; height: 0; }
+.fx-pillar .beam { position: absolute; left: -40px; bottom: -40px; width: 80px; height: 100vh; transform-origin: 50% 100%;
+  background: linear-gradient(to top, color-mix(in srgb, var(--fx) 90%, #fff), color-mix(in srgb, var(--fx) 40%, transparent) 40%, transparent); filter: blur(6px);
+  animation: beam 1.5s ease-out forwards; }
+@keyframes beam { 0% { transform: scaleX(.1); opacity: 0; } 20% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(.3); opacity: 0; } }
+.fx-pillar .ring, .fx-slam .ring { position: absolute; left: -50px; top: -20px; width: 100px; height: 40px; border-radius: 50%; border: 4px solid var(--fx, #d8c8a8);
+  box-shadow: 0 0 16px var(--fx, #d8c8a8); animation: groundRing 1s ease-out forwards; }
+@keyframes groundRing { 0% { transform: scale(.3); opacity: 1; } 100% { transform: scale(3); opacity: 0; } }
+
+/* A big creature lands: a ring of dust. */
+.fx-slam .ring { border-color: #c8b08a; box-shadow: 0 0 18px #8a6a40; filter: blur(1px); animation: groundRing .8s ease-out forwards; transform-origin: center; scale: var(--s); }
+.fx-slam .r2 { animation-delay: .12s; opacity: 0; }
+
+/* Tokens and clashes: a puff of coloured smoke. */
+.fx-puff { width: 0; height: 0; }
+.fx-puff i { position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--fx) 70%, #fff), transparent 70%);
+  animation: puff .7s ease-out forwards; }
+@keyframes puff { 0% { transform: rotate(var(--a)) translateX(0) scale(.4); opacity: .9; } 100% { transform: rotate(var(--a)) translateX(34px) scale(1.4); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) { .fx-layer { display: none; } }
+
+.fx-gallery-panel { position: fixed; left: 50%; top: 8px; transform: translateX(-50%); z-index: 60; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 900px; padding: 8px 12px; border-radius: 12px; background: #1e140cf0; color: #ffd98a; font: 600 13px Inter, sans-serif; box-shadow: 0 0 0 1px #d4a65066, 0 10px 26px #000a; }

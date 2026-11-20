@@ -3,6 +3,7 @@ import type { CardId, Keyword, PlayerId } from '../../engine/types';
 import { DEFAULT_STOPS } from '../../engine/types';
 import type { CardView, GameView, PlayerView } from '../../engine/view';
 import type { NetState } from '../net';
+import { FxGallery } from './FxGallery';
 import { GameBoard } from './GameBoard';
 import { Foil, imageUrl } from './Card';
 import { trackFoilPointer } from '../foil';
@@ -15,6 +16,7 @@ import { sound, SOUND_NAMES, type SoundName, type SoundOpts } from '../sound';
 export function Showcase({ scene }: { scene: string }) {
   if (scene === 'gallery') return <FoilGallery />;
   if (scene === 'sounds') return <SoundBoard />;
+  if (scene === 'fx') return <FxGallery />;
   return <ShowcaseTable scene={scene} />;
 }
 
