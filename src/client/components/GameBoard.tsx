@@ -692,41 +692,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   }
   const lifeAfter = (pid: PlayerId) => (preview && preview.life[pid] ? (view.players.find((p) => p.id === pid)?.life ?? 0) + preview.life[pid] : undefined);
 
-  // ---------- Ability popover ----------
-
-/** A small panel above a card (follows it while the camera drifts), with the card's choices. */
-function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose: () => void; children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    let raf = 0;
-    const place = () => {
-      const el = ref.current;
-      const target = document.querySelector(anchor);
-      if (el && target) {
-        const r = target.getBoundingClientRect();
-        const w = el.offsetWidth;
-        const h = el.offsetHeight;
-        let x = r.left + r.width / 2 - w / 2;
-        let y = r.top - h - 12;
-        if (y < 8) y = r.bottom + 12;
-        x = Math.max(8, Math.min(window.innerWidth - w - 8, x));
-        y = Math.max(8, Math.min(window.innerHeight - h - 8, y));
-        el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
-        el.style.visibility = 'visible';
-      } else if (!target) onClose();
-      raf = requestAnimationFrame(place);
-    };
-    place();
-    return () => cancelAnimationFrame(raf);
-  }, [anchor, onClose]);
-  return (
-    <div ref={ref} className="action-pop" style={{ visibility: 'hidden' }} onClick={(e) => e.stopPropagation()}>
-      {children}
-    </div>
-  );
-}
-
-// ---------- Arrows ----------
+  // ---------- Arrows ----------
   const arrows: Arrow[] = [];
   const toSel = (t: Target | string) =>
     typeof t === 'string'
@@ -1301,6 +1267,9 @@ function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose:
 /** A small panel above a card (follows it while the camera drifts), with the card's choices. */
 function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Keep the latest onClose without restarting the placement loop on every render.
+  const close = useRef(onClose);
+  close.current = onClose;
   useLayoutEffect(() => {
     let raf = 0;
     const place = () => {
@@ -1317,12 +1286,12 @@ function ActionPopover({ anchor, onClose, children }: { anchor: string; onClose:
         y = Math.max(8, Math.min(window.innerHeight - h - 8, y));
         el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
         el.style.visibility = 'visible';
-      } else if (!target) onClose();
+      } else if (!target) close.current();
       raf = requestAnimationFrame(place);
     };
     place();
     return () => cancelAnimationFrame(raf);
-  }, [anchor, onClose]);
+  }, [anchor]);
   return (
     <div ref={ref} className="action-pop" style={{ visibility: 'hidden' }} onClick={(e) => e.stopPropagation()}>
       {children}

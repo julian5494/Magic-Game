@@ -137,10 +137,6 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .perm-wrap > .card { position: relative; z-index: 1; }
 .opp-area .battlefield { flex-direction: column-reverse; }
 
-.hand { display: flex; align-items: flex-end; justify-content: center; padding: 0 10px 4px; min-width: 0; }
-.hand .card { margin-left: -28px; transition: transform 0.12s, margin 0.12s; }
-.hand .card:first-child { margin-left: 0; }
-.hand .card:hover { transform: translateY(-36px) scale(1.15); z-index: 5; margin-right: 26px; }
 
 .prompt { background: var(--panel); border-radius: 8px; padding: 8px 10px; min-height: 40px; font-size: 13px; }
 .buttons { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
@@ -635,7 +631,11 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .handcard .card { width: 132px !important; height: 184px !important; margin: 0 !important; box-shadow: 0 2px 0 #050505, 0 -4px 16px #000a; }
 .handcard .card.selectable { box-shadow: 0 2px 0 #050505, 0 0 0 2px var(--gold-glow), 0 0 16px var(--amber); }
 .hand-fan.open .handcard { bottom: 70px; }
-.hand-fan.open .handcard:hover { transform: translateY(-26px) rotate(0deg) scale(1.14); z-index: 60 !important; }
+.hand-fan.open .handcard:hover { z-index: 60 !important; }
+/* The card inside rises and straightens; the slot you're hovering stays put, so it can't slip out from
+   under the pointer and flicker. */
+.handcard .card { transform-origin: 50% 100%; transition: transform .22s; }
+.hand-fan.open .handcard:hover .card { transform: rotate(calc(-1 * var(--a))) translateY(calc(-26px - var(--y))) scale(1.14); }
 .my-die { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); z-index: 45; }
 .hand-fan.open .my-die { z-index: 1; }
 .me-name { position: absolute; left: 56px; bottom: 30px; font: 700 14px Cinzel, Georgia, serif; color: var(--title); display: flex; gap: 8px; align-items: center; }
