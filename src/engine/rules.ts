@@ -268,6 +268,7 @@ export function putTriggerOnStack(state: GameState, trig: PendingTrigger, target
 }
 
 function processPendingTrigger(state: GameState): void {
+  if (!state.pendingTriggers.length) return;
   const order = apnapOrder(state);
   // Stable sort keeps a chosen trigger at the front of its controller's group.
   state.pendingTriggers.sort((a, b) => order.indexOf(a.controller) - order.indexOf(b.controller) || Number(!!b.chosen) - Number(!!a.chosen));
@@ -569,6 +570,7 @@ function enterStep(state: GameState, step: Step): void {
       for (const c of battlefieldCards(state)) {
         if (c.controller !== ap) continue;
         c.sick = false;
+        if (hasKeyword(state, c, 'NoUntap')) continue;
         if (c.skipUntap > 0) c.skipUntap--;
         else c.tapped = false;
       }
@@ -708,6 +710,10 @@ export function advanceStep(state: GameState): void {
 function dealCombatDamage(state: GameState, first: boolean): void {
   const combat = state.combat;
   if (!combat) return;
+  if (state.fogTurn === state.turn) {
+    if (!first) log(state, 'All combat damage is prevented.');
+    return;
+  }
   const fs = (c: CardInstance) => hasKeyword(state, c, 'First strike') || hasKeyword(state, c, 'Double strike');
   const strikes = (c: CardInstance) => {
     if (first) return fs(c);

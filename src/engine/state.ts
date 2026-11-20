@@ -184,6 +184,7 @@ export function snapshot(state: GameState, card: CardInstance): Snapshot {
     zone: card.zone,
     attachedTo: card.attachedTo,
     linked: [...card.linked],
+    counters: { ...card.counters },
   };
 }
 
@@ -198,7 +199,7 @@ export function matchesFilter(
   const def = defOf(card);
   if (f.types && !f.types.some((t) => def.types.includes(t))) return false;
   if (f.notTypes && f.notTypes.some((t) => def.types.includes(t))) return false;
-  if (f.subtypes && !f.subtypes.some((t) => (def.subtypes ?? []).includes(t))) return false;
+  if (f.subtypes && !f.subtypes.some((t) => (def.subtypes ?? []).includes(t)) && !(def.keywords ?? []).includes('Changeling')) return false;
   if (f.supertypes && !f.supertypes.some((t) => (def.supertypes ?? []).includes(t))) return false;
   if (f.controller === 'you' && card.controller !== controller) return false;
   if (f.controller === 'opponent' && card.controller === controller) return false;

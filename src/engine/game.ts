@@ -240,6 +240,14 @@ export function canAct(state: GameState, pid: PlayerId): boolean {
 }
 
 export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] {
+  const all = allLegalActions(state, pid);
+  // Split second: while it's on the stack, only mana abilities can be used.
+  if (state.stack.some((it) => it.kind === 'spell' && state.cards[it.cardId] && hasKeyword(state, state.cards[it.cardId], 'Split second')))
+    return all.filter((a) => a.type === 'manaTap' || a.isMana);
+  return all;
+}
+
+function allLegalActions(state: GameState, pid: PlayerId): PlayableAction[] {
   if (!canAct(state, pid)) return [];
   const p = getPlayer(state, pid);
   const out: PlayableAction[] = [];
@@ -328,7 +336,9 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
         if (helps) out.push({ ...a, label: `${a.label} (${def.costHelp!.join('/')} first)`, helpFirst: true });
       };
       if (def.modes && !v?.effect) {
-        for (const combo of modeCombos(def.modes.length, def.modeCount ?? 1)) {
+        const counts = [def.modeCount ?? 1];
+        if (def.modeCountWithCommander && battlefieldCards(state).some((c) => c.controller === pid && c.commander)) counts.push(def.modeCountWithCommander);
+        for (const combo of counts.flatMap((k) => modeCombos(def.modes!.length, k))) {
           const targets = specViews(state, combo.flatMap((m) => def.modes![m].targets), pid, id);
           if (!targets) continue;
           const label = `Cast ${name}: ${combo.map((m) => def.modes![m].text.replace(/^•\s*/, '')).join(' + ')}`;

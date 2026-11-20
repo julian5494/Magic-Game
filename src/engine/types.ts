@@ -29,7 +29,13 @@ export type Supertype = 'Legendary' | 'Basic';
 export type Keyword =
   | 'Flying' | 'Reach' | 'Trample' | 'Haste' | 'Vigilance' | 'Deathtouch' | 'Lifelink'
   | 'First strike' | 'Double strike' | 'Menace' | 'Defender' | 'Hexproof' | 'Shroud'
-  | 'Indestructible' | 'Flash' | 'Prowess' | 'Exalted' | 'Unblockable' | 'CantBlock' | 'CantAttack';
+  | 'Indestructible' | 'Flash' | 'Prowess' | 'Exalted' | 'Unblockable' | 'CantBlock' | 'CantAttack'
+  /** Every creature type. */
+  | 'Changeling'
+  /** Doesn't untap during its controller's untap step. */
+  | 'NoUntap'
+  /** While on the stack, players can't cast spells or activate non-mana abilities. */
+  | 'Split second';
 
 export type ZoneName = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'command' | 'stack';
 
@@ -181,6 +187,8 @@ export interface Snapshot {
   zone: ZoneName;
   attachedTo?: CardId | null;
   linked?: CardId[];
+  /** Counters it had as it left (for persist / undying). */
+  counters?: Record<string, number>;
 }
 
 export type GameEvent =
@@ -295,6 +303,8 @@ export interface GameState {
    * each runs, in order, once no decisions are pending.
    */
   continuations?: { ctx: any; key: string }[];
+  /** Fog: combat damage is prevented during this turn. */
+  fogTurn?: number;
   log: LogEntry[];
   seed: number;
   nextId: number;

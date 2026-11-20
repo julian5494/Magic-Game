@@ -246,7 +246,11 @@ export type StaticAbility =
    * Spells cost more or less: "Artifact spells you cast cost {1} less to cast" (delta -1, whose 'you'),
    * "Noncreature spells your opponents cast cost {1} more" (delta +1, whose 'opponents'). Only generic mana changes.
    */
-  | { kind: 'costMod'; filter: CardFilter; delta: number; whose: 'you' | 'opponents' | 'all' };
+  | { kind: 'costMod'; filter: CardFilter; delta: number; whose: 'you' | 'opponents' | 'all' }
+  /** Doubling Season / Parallel Lives: your tokens are created twice over. */
+  | { kind: 'tokenDouble' }
+  /** Boon Reflection: you gain twice as much life. */
+  | { kind: 'lifeDouble' };
 
 export interface CastVariant {
   label: string;
@@ -294,6 +298,8 @@ export interface CardDef {
   modes?: { text: string; targets: TargetSpec[]; effect: Effect }[];
   /** How many modes are chosen (default 1). */
   modeCount?: number;
+  /** "If you control a commander as you cast this spell, you may choose both instead." */
+  modeCountWithCommander?: number;
   /** Starting loyalty for planeswalkers. */
   loyalty?: number;
   /** Double-faced card: the other face, by name (modal: playable land face; transform: what it turns into). */

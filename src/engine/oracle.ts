@@ -11,7 +11,8 @@ import { parseCost } from './mana';
 import { parseCount, parseExpr } from './oracle-amounts';
 import { findDef, getDef, registerCards } from './registry';
 import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf } from './state';
-import type { CardType, Color, GameState, Keyword, ManaSym, PlayerId, Supertype } from './types';
+import type { CardType, Color, GameState, Keyword, ManaSym, PlayerId, Supertype, Target } from './types';
+import { legalTargets, makeCtx } from './ops';
 
 export interface ScryFace {
   name: string;
@@ -64,7 +65,7 @@ const KEYWORDS: Record<string, Keyword> = {
   flying: 'Flying', reach: 'Reach', trample: 'Trample', haste: 'Haste', vigilance: 'Vigilance', deathtouch: 'Deathtouch',
   lifelink: 'Lifelink', 'first strike': 'First strike', 'double strike': 'Double strike', menace: 'Menace',
   defender: 'Defender', hexproof: 'Hexproof', shroud: 'Shroud', indestructible: 'Indestructible', flash: 'Flash',
-  prowess: 'Prowess', exalted: 'Exalted',
+  prowess: 'Prowess', exalted: 'Exalted', changeling: 'Changeling', 'split second': 'Split second',
 };
 
 function parseKeywordList(s: string): Keyword[] | null {
@@ -805,6 +806,20 @@ const SENTENCES: SentenceParser[] = [
     const n = /^(a|one)$/i.test(m[1]) ? 1 : num(m[1]);
     return typeof n === 'number' ? { targets: [], run: (ctx) => ctx.putFromHandOnTop(ctx.controller, n) } : null;
   },
+  (s) => {
+    if (/^prevent all combat damage that would be dealt this turn$/i.test(s))
+      return { targets: [], run: (ctx) => { ctx.state.fogTurn = ctx.state.turn; ctx.log('Combat damage will be prevented this turn.'); } };
+    if (/^that player draws (?:an additional card|a card)$/i.test(s))
+      return {
+        targets: [],
+        run: (ctx) => {
+          const e = ctx.event;
+          const who = e?.t === 'step' ? e.active : e && 'player' in e ? (e as { player: string }).player : null;
+          if (who) ctx.draw(who, 1);
+        },
+      };
+    return null;
+  },
   // Explore.
   (s) => {
     if (/^(?:cardname|it) explores$/i.test(s)) return { targets: [], run: (ctx) => ctx.explore(ctx.source) };
@@ -1512,6 +1527,8 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
   }
   if (/^(?:this spell|cardname) can't be countered$/i.test(l)) return { statics: [{ kind: 'cantBeCountered' }] };
   if (/^cardname can't be blocked$/i.test(l)) return { keywords: ['Unblockable'] };
+  if (/^cardname can't block and can't be blocked$/i.test(l)) return { keywords: ['Unblockable', 'CantBlock'] };
+  if (/^cardname can't block$/i.test(l)) return { keywords: ['CantBlock'] };
   return null;
 }
 
@@ -1718,18 +1735,84 @@ export function convertScryfall(card: ScryCard): CardDef {
   const spellEffects: ((ctx: Ctx) => void)[] = [];
   let lineNo = 0;
   let modal: { count: number } | null = null;
+  type ModalMode = { text: string; targets: TargetSpec[]; effect: (ctx: Ctx) => void };
+  let modalTrig: { trig: TrigSpec[]; count: number; modes: ModalMode[]; raw: string; key: string; bad: boolean } | null = null;
+  const finishModalTrigger = () => {
+    const mt = modalTrig!;
+    modalTrig = null;
+    if (mt.bad || mt.modes.length < 1) {
+      def.unsupported!.push(mt.raw);
+      return;
+    }
+    const { modes, key, count } = mt;
+    // Run a mode; a mode with a target picks it now (as the ability resolves).
+    const runMode = (ctx: Ctx, i: number, left: number[]) => {
+      const m = modes[i];
+      const next = (c2: Ctx) => {
+        if (left.length && count > 1 && left.length > modes.length - count) ask(c2, left);
+      };
+      if (!m.targets.length) {
+        m.effect(ctx);
+        next(ctx);
+        return;
+      }
+      const opts = legalTargets(ctx.state, m.targets[0], ctx.controller, ctx.source);
+      if (!opts.length) return next(ctx);
+      const cards = opts.filter((o) => o.type === 'card').map((o) => o.id);
+      if (cards.length === opts.length) ctx.chooseCards(ctx.controller, `${m.text}: choose ${m.targets[0].label ?? 'a target'}`, cards, 1, 1, `${key}:card`, { i, left });
+      else ctx.chooseOption(ctx.controller, `${m.text}: choose ${m.targets[0].label ?? 'a target'}`, opts.map((o) => ({ id: `${o.type}:${o.id}`, label: o.type === 'player' ? getPlayer(ctx.state, o.id).name : ctx.state.cards[o.id]?.def ?? o.id })), `${key}:opt`, { i, left });
+    };
+    const withTarget = (ctx: Ctx, t: Target, i: number, left: number[]) => {
+      const c2 = makeCtx(ctx.state, { controller: ctx.controller, source: ctx.source, targets: [t], def: def.name, x: ctx.x, event: ctx.event, snapshot: ctx.snapshot });
+      modes[i].effect(c2);
+      if (left.length && count > 1 && left.length > modes.length - count) ask(c2, left);
+    };
+    const ask = (ctx: Ctx, left: number[]) =>
+      ctx.chooseOption(ctx.controller, count > 1 ? 'Choose a mode' : 'Choose one —', left.map((i) => ({ id: String(i), label: modes[i].text })), `${key}:mode`, { left });
+    def.handlers![`${key}:mode`] = (ctx, a, extra) => {
+      const i = Number(a.option);
+      runMode(ctx, i, (extra?.left ?? []).filter((x: number) => x !== i));
+    };
+    def.handlers![`${key}:card`] = (ctx, a, extra) => {
+      if (a.cards?.[0]) withTarget(ctx, { type: 'card', id: a.cards[0] }, extra.i, extra.left);
+    };
+    def.handlers![`${key}:opt`] = (ctx, a, extra) => {
+      const [type, id] = String(a.option).split(':');
+      withTarget(ctx, { type: type as 'card' | 'player', id } as Target, extra.i, extra.left);
+    };
+    for (const t of mt.trig)
+      def.triggers!.push({ on: t.on, spellTypes: t.spellTypes, spellNotTypes: t.spellNotTypes, condition: t.condition, text: mt.raw, effect: (ctx) => ask(ctx, modes.map((_, i) => i)) });
+  };
   let kickedText: string | null = null;
   const spellLines: string[] = [];
   for (const rawLine of text.split('\n')) {
     const line = stripAbilityWord(rawLine.trim());
     lineNo++;
     if (!line) continue;
+    // Modal triggers: "When this enters, choose one —" followed by "• mode" lines.
+    if (modalTrig && /^•/.test(line)) {
+      const body = line.replace(/^•\s*/, '').replace(/^[A-Z][A-Za-z' -]+ — /, '');
+      const eff = parseEffect(body, def, `mt${lineNo}`);
+      if (eff && eff.targets.length <= 1) modalTrig.modes.push({ text: body, targets: eff.targets, effect: eff.effect });
+      else def.unsupported!.push(`${rawLine.trim()} (this mode isn't available)`);
+      continue;
+    }
+    if (modalTrig) finishModalTrigger();
+    const tm = line.match(/^((?:when|whenever|at) [^,]+), choose (one|two) —$/i);
+    if (tm && !isSpell) {
+      const trig = parseTrigger(tm[1]);
+      if (trig) {
+        modalTrig = { trig, count: tm[2].toLowerCase() === 'one' ? 1 : 2, modes: [], raw: rawLine.trim(), key: `mt${lineNo}`, bad: false };
+        continue;
+      }
+    }
     // Modal spells: "Choose one —" followed by "• mode" lines.
-    const cm = line.match(/^choose (one|two) —$/i);
+    const cm = line.match(/^choose (one|two) —$/i) ?? line.match(/^choose (one)\. if you control a commander as you cast this spell, you may choose both instead\.?$/i);
     if (cm && isSpell) {
       modal = { count: cm[1].toLowerCase() === 'one' ? 1 : 2 };
       def.modes = [];
       def.modeCount = modal.count;
+      if (/commander/i.test(line)) def.modeCountWithCommander = 2;
       continue;
     }
     if (modal && /^•/.test(line)) {
@@ -1761,6 +1844,7 @@ export function convertScryfall(card: ScryCard): CardDef {
     def.unsupported!.push(rawLine.trim());
     if (DRAWBACKS.some((r) => r.test(line))) def.cannotCast = true;
   }
+  if (modalTrig) finishModalTrigger();
   const kicker: string | undefined = (def as any)._kicker;
   const overload: string | undefined = (def as any)._overload;
   delete (def as any)._kicker;
@@ -1911,6 +1995,88 @@ function handleLine(
   km = l.match(/^you may pay (\{[0-9WUBRGC]+\}(?:\{[0-9WUBRGC]+\})*) rather than pay this spell's mana cost$/i);
   if (km) {
     def.castVariants = [...(def.castVariants ?? []), { label: `Alternative cost ${km[1].toUpperCase()}`, cost: km[1].toUpperCase(), zone: 'hand' }];
+    return true;
+  }
+  // ---- Keyword abilities with a number or a rule of their own.
+  if (/^devoid$/i.test(l)) {
+    def.colors = [];
+    return true;
+  }
+  km = l.match(/^annihilator (\d+)$/i);
+  if (km) {
+    const n = +km[1];
+    def.triggers!.push({
+      on: 'attacks',
+      text: `Annihilator ${n}: the defending player sacrifices ${n} permanent${n > 1 ? 's' : ''}.`,
+      effect: (ctx) => {
+        if (ctx.event?.t === 'attacks') ctx.eachSacrifices([ctx.event.defender], {}, n);
+      },
+    });
+    return true;
+  }
+  km = l.match(/^toxic (\d+)$/i);
+  if (km) {
+    const n = +km[1];
+    def.triggers!.push({
+      on: 'dealsCombatDamageToPlayer',
+      text: `Toxic ${n}: that player gets ${n} poison counter${n > 1 ? 's' : ''}.`,
+      effect: (ctx) => {
+        if (ctx.event?.t !== 'combatDamagePlayer') return;
+        const pl = getPlayer(ctx.state, ctx.event.player);
+        pl.poison += n;
+        ctx.log(`${pl.name} gets ${n} poison counter${n > 1 ? 's' : ''} (${pl.poison}).`);
+      },
+    });
+    return true;
+  }
+  if (/^persist$/i.test(l)) {
+    def.triggers!.push({
+      on: 'dies',
+      text: 'Persist: if it had no -1/-1 counters, it returns with a -1/-1 counter.',
+      condition: (_s, e) => e.t === 'leaves' && !(e.snap.counters?.['-1/-1'] ?? 0),
+      effect: (ctx) => {
+        const id = ctx.snapshot?.id;
+        const c = id ? ctx.state.cards[id] : undefined;
+        if (!c || c.zone !== 'graveyard') return;
+        ctx.moveCard(c.id, 'battlefield', { controller: c.owner });
+        c.counters['-1/-1'] = (c.counters['-1/-1'] ?? 0) + 1;
+      },
+    });
+    return true;
+  }
+  if (/^evolve$/i.test(l)) {
+    def.triggers!.push({
+      on: 'otherCreatureEtbYours',
+      text: 'Evolve: if the new creature is bigger in power or toughness, put a +1/+1 counter on this.',
+      effect: (ctx) => {
+        if (ctx.event?.t !== 'etb' || !ctx.self) return;
+        const other = ctx.state.cards[ctx.event.card];
+        if (!other) return;
+        if (ctx.power(other) > ctx.power(ctx.self) || ctx.toughness(other) > ctx.toughness(ctx.self)) ctx.addCounters(ctx.self, '+1/+1', 1);
+      },
+    });
+    return true;
+  }
+  if (/^cardname doesn't untap during your untap step$/i.test(l)) {
+    def.keywords!.push('NoUntap');
+    return true;
+  }
+  if (/^if (?:an effect would create one or more tokens under your control|one or more tokens would be created under your control), (?:it creates )?twice that many of those tokens (?:are created )?instead$/i.test(l)) {
+    def.statics!.push({ kind: 'tokenDouble' });
+    return true;
+  }
+  if (/^if you would gain life, you gain twice that much life instead$/i.test(l)) {
+    def.statics!.push({ kind: 'lifeDouble' });
+    return true;
+  }
+  // Filter lands: "{1}, {T}: Add {W}{W}, {W}{U}, or {U}{U}."
+  km = line.match(/^(\{[0-9WUBRGC](?:\/[WUBRGC])?\}(?:, \{T\})?): Add (\{[WUBRGC]\}\{[WUBRGC]\}), (\{[WUBRGC]\}\{[WUBRGC]\}), or (\{[WUBRGC]\}\{[WUBRGC]\})\.?$/i);
+  if (km) {
+    const mana = km[1].match(/^\{[^}]+\}/)![0].toUpperCase();
+    for (const combo of [km[2], km[3], km[4]]) {
+      const syms = (combo.match(/\{([WUBRGC])\}/g) ?? []).map((x) => x[1].toUpperCase() as ManaSym);
+      def.abilities!.push({ text: `${km[1]}: Add ${combo}.`, cost: { mana, tap: /\{T\}/.test(km[1]) }, mana: { colors: syms, fixed: syms } });
+    }
     return true;
   }
   // ---- Costs: helpers, reductions, alternatives.

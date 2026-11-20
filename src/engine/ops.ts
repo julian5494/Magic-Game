@@ -225,6 +225,8 @@ export function drawCards(state: GameState, pid: PlayerId, n: number): void {
 
 export function gainLife(state: GameState, pid: PlayerId, n: number): void {
   if (n <= 0) return;
+  // Life-doubling effects stack (each one doubles again).
+  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of defOf(c).statics ?? []) if (st.kind === 'lifeDouble') n *= 2;
   const p = getPlayer(state, pid);
   if (p.lost) return;
   p.life += n;
@@ -308,6 +310,8 @@ export function destroy(state: GameState, id: CardId): boolean {
 }
 
 export function createToken(state: GameState, pid: PlayerId, defName: string, n = 1): CardInstance[] {
+  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of defOf(c).statics ?? []) if (st.kind === 'tokenDouble') n *= 2;
+  n = Math.min(n, 200);
   const out: CardInstance[] = [];
   for (let i = 0; i < n; i++) {
     const card = makeCard(state, defName, pid, 'stack', true);
