@@ -205,7 +205,7 @@ export function CardPreview({ card }: { card: CardView }) {
         </div>
       )}
       {counters.length > 0 && <div className="preview-kw">{counters.map(([k, n]) => `${n} ${k}`).join(' · ')} counters</div>}
-      {card.keywords.length > 0 && <div className="preview-kw">{card.keywords.join(', ')}</div>}
+      {card.keywords.length > 0 && <div className="preview-kw">{card.keywords.map(keywordLabel).join(', ')}</div>}
       {card.commanderTax ? <div className="preview-kw">Commander tax: +{card.commanderTax}</div> : null}
       {card.cannotCast && <div className="preview-warn">This card can't be played yet: the game can't enforce all of its rules.</div>}
       {card.unsupported && (
@@ -250,4 +250,16 @@ export function CardPreview({ card }: { card: CardView }) {
       <div className="preview-text preview-extra">{extras}</div>
     </div>
   );
+}
+
+const PRO_NAMES: Record<string, string> = { ProW: 'white', ProU: 'blue', ProB: 'black', ProR: 'red', ProG: 'green' };
+
+/** Readable keyword names ("ProR" → "Protection from red"). */
+export function keywordLabel(k: string): string {
+  if (PRO_NAMES[k]) return `Protection from ${PRO_NAMES[k]}`;
+  if (k === 'Unblockable') return "Can't be blocked";
+  if (k === 'CantBlock') return "Can't block";
+  if (k === 'CantAttack') return "Can't attack";
+  if (k === 'NoUntap') return "Doesn't untap";
+  return k;
 }

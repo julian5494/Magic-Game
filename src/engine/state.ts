@@ -87,7 +87,7 @@ export function cmc(card: CardInstance | Snapshot): number {
 }
 
 export function isLegendary(card: CardInstance): boolean {
-  return (defOf(card).supertypes ?? []).includes('Legendary');
+  return !card.copyNotLegendary && (defOf(card).supertypes ?? []).includes('Legendary');
 }
 
 /** Static abilities of the permanents a player controls. */
@@ -161,6 +161,13 @@ export function getKeywords(state: GameState, card: CardInstance): Keyword[] {
   for (const k of mods.lost) set.delete(k);
   if (card.dashed) set.add('Haste');
   return [...set];
+}
+
+/** Does this permanent have protection from any of these colors? */
+export function protectedFrom(state: GameState, card: CardInstance, colors: readonly string[]): boolean {
+  if (!colors.length) return false;
+  const kws = getKeywords(state, card);
+  return colors.some((c) => kws.includes(`Pro${c}` as Keyword));
 }
 
 export function hasKeyword(state: GameState, card: CardInstance, kw: Keyword): boolean {

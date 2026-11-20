@@ -68,10 +68,28 @@ const KEYWORDS: Record<string, Keyword> = {
   prowess: 'Prowess', exalted: 'Exalted', changeling: 'Changeling', 'split second': 'Split second',
 };
 
+const PRO: Record<string, Keyword> = { white: 'ProW', blue: 'ProU', black: 'ProB', red: 'ProR', green: 'ProG' };
+
 function parseKeywordList(s: string): Keyword[] | null {
-  const parts = s.toLowerCase().replace(/\.$/, '').split(/,\s*(?:and\s+)?|\s+and\s+/).map((p) => p.trim()).filter(Boolean);
+  const text = s
+    .toLowerCase()
+    .replace(/\.$/, '')
+    .replace(/can't be blocked/g, 'unblockable')
+    .replace(/protection from each color|protection from all colors/g, 'protection from white, protection from blue, protection from black, protection from red, protection from green')
+    // "protection from red and from blue" → two protections.
+    .replace(/protection from (\w+) and from (\w+)/g, 'protection from $1, protection from $2');
+  const parts = text.split(/,\s*(?:and\s+)?|\s+and\s+/).map((p) => p.trim()).filter(Boolean);
   const out: Keyword[] = [];
   for (const p of parts) {
+    const pro = p.match(/^protection from (white|blue|black|red|green)$/);
+    if (pro) {
+      out.push(PRO[pro[1]]);
+      continue;
+    }
+    if (p === 'unblockable') {
+      out.push('Unblockable');
+      continue;
+    }
     const k = KEYWORDS[p];
     if (!k) return null;
     out.push(k);
@@ -111,11 +129,17 @@ function parseObject(phraseIn: string): ObjSpec | null {
   if (lower === 'opponent' || lower === 'opponent or planeswalker') return { kind: 'opponent', filter: {} };
 
   // Graveyard cards.
-  let m = p.match(/^(?:(.*?)\s+)?cards? (?:from|in) (your|a) graveyard$/i);
+  let m = p.match(/^(?:(.*?)\s+)?cards?(?: with mana value (\d+) or (less|greater))? (?:from|in) (your|a) graveyard$/i);
   if (m) {
     const inner = m[1] ? parseNouns(m[1]) : { types: undefined, filter: {} as CardFilter };
     if (!inner) return null;
-    return { kind: 'graveyardCard', filter: { ...inner.filter, types: inner.types }, graveyard: m[2].toLowerCase() === 'your' ? 'yours' : 'any' };
+    const filter: CardFilter = { ...inner.filter, types: inner.types };
+    if (m[2]) {
+      const n = +m[2];
+      const less = m[3].toLowerCase() === 'less';
+      addCustom(filter, (_s, c) => (less ? cmcOf(c.def) <= n : cmcOf(c.def) >= n));
+    }
+    return { kind: 'graveyardCard', filter, graveyard: m[4].toLowerCase() === 'your' ? 'yours' : 'any' };
   }
   // Spells.
   m = p.match(/^(?:(.*?)\s+)?spell$/i);
@@ -564,6 +588,51 @@ const SENTENCES: SentenceParser[] = [
     const bottom = m[2].toLowerCase() === 'bottom';
     return action(m[1], 'opponent', (ctx, id) => ctx.moveCard(id, 'library', { bottom }));
   },
+  // "Return it to its owner's hand at the beginning of the next end step" (The Locust God).
+  (s) => {
+    const m = s.match(/^return (it|cardname) to its owner's hand at the beginning of the next end step$/i);
+    if (!m) return null;
+    const k = hkey();
+    return {
+      targets: [],
+      run: (ctx) => {
+        const id = ctx.snapshot?.id ?? ctx.self?.id;
+        if (id) ctx.delay('nextEnd', k, { id, inc: ctx.state.cards[id]?.inc });
+      },
+      handlers: {
+        [k]: (ctx, _a, data) => {
+          const c = ctx.state.cards[data?.id];
+          if (c && c.inc === data.inc && (c.zone === 'graveyard' || c.zone === 'exile')) ctx.moveCard(c.id, 'hand');
+        },
+      },
+    };
+  },
+  // "Put target artifact card from your graveyard on top of your library" (Academy Ruins).
+  (s) => {
+    const m = s.match(/^put (target .+? from your graveyard) on top of your library$/i);
+    if (!m) return null;
+    const t = parseTargets(m[1], 'self');
+    if (!t || t.length !== 1 || t[0].kind !== 'graveyardCard') return null;
+    return { targets: t, run: (ctx, base) => { const c = ctx.card(base); if (c) ctx.moveCard(c.id, 'library'); } };
+  },
+  // Myriad Landscape: up to two basic lands that share a land type.
+  (s) => {
+    const m = s.match(/^search your library for up to two basic land cards that share a land type, put them onto the battlefield( tapped)?$/i);
+    if (!m) return null;
+    const k = hkey();
+    return {
+      targets: [],
+      run: (ctx) => {
+        const types = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].filter((t) =>
+          getPlayer(ctx.state, ctx.controller).library.some((id) => (findDef(ctx.state.cards[id].def)?.subtypes ?? []).includes(t) && (findDef(ctx.state.cards[id].def)?.supertypes ?? []).includes('Basic')),
+        );
+        if (types.length) ctx.chooseOption(ctx.controller, 'Choose a basic land type', types.map((t) => ({ id: t, label: t })), k);
+      },
+      handlers: {
+        [k]: (ctx, a) => ctx.search({ filter: { basicLand: true, types: ['Land'], subtypes: [String(a.option)] }, max: 2, dest: 'battlefield', tapped: !!m[1], label: `Search for up to two basic ${a.option} cards` }),
+      },
+    };
+  },
   // Additional combat phases.
   (s) => {
     const a = /^after this main phase, there is an additional combat phase(?: followed by an additional main phase)?$/i.test(s);
@@ -821,10 +890,22 @@ const SENTENCES: SentenceParser[] = [
   },
   // Search library
   (s) => {
-    const mm = s.match(/^(?:(its controller|that player|THATPLAYER|target player) (?:may )?searches? their|(?:you may )?search your) library for (.+? cards?)(?: with different names)?, (.+)$/i);
+    const mm = s.match(
+      /^(?:(its controller|that player|THATPLAYER|target player) (?:may )?searches? their|(?:you may )?search your) library for (.+? cards?)(?: with different names)?(?: with mana value (\w+)( or less| or greater)?)?, (.+)$/i,
+    );
     if (!mm) return null;
     const who = mm[1];
-    const m = [mm[0], mm[2], mm[3]];
+    const m = [mm[0], mm[2], mm[5]];
+    // "with mana value X or less", "with mana value 2" (X comes from the spell or ability).
+    const mvRaw = mm[3];
+    const mvN = mvRaw ? (mvRaw.toUpperCase() === 'X' ? 'X' : num(mvRaw)) : null;
+    if (mvRaw && (mvN === null || mvN === undefined)) return null;
+    const mvCmp = (mm[4] ?? '').trim();
+    const withMv = (f: CardFilter, x: number): CardFilter => {
+      if (mvN === null) return f;
+      const n = mvN === 'X' ? x : (mvN as number);
+      return { ...f, custom: (st, c, ctl, src) => (!f.custom || f.custom(st, c, ctl, src)) && (mvCmp === 'or less' ? cmcOf(c.def) <= n : mvCmp === 'or greater' ? cmcOf(c.def) >= n : cmcOf(c.def) === n) };
+    };
     const what = m[1].match(/^(?:a|an|up to (\w+)) (?:(.+?) )?cards?$/i);
     if (!what) return null;
     const max = what[1] ? num(what[1]) : 1;
@@ -846,14 +927,15 @@ const SENTENCES: SentenceParser[] = [
     }
     const rest = m[2].toLowerCase();
     const split = /put one onto the battlefield tapped and the other into your hand/.test(rest);
-    let dest: 'battlefield' | 'hand' | 'top';
+    let dest: 'battlefield' | 'hand' | 'top' | 'graveyard';
     if (split || /onto the battlefield/.test(rest)) dest = 'battlefield';
     else if (/into your hand/.test(rest)) dest = 'hand';
     else if (/on top/.test(rest)) dest = 'top';
+    else if (/into your graveyard/.test(rest)) dest = 'graveyard';
     else return null;
     const tapped = /onto the battlefield tapped/.test(rest);
     return forPlayers(who ?? 'you', 'self', (ctx, p) =>
-      ctx.search({ player: p, filter, max, dest, tapped, split, label: `Search your library for ${m[1]}` }),
+      ctx.search({ player: p, filter: withMv(filter, ctx.x), max, dest, tapped, split, label: `Search your library for ${m[1]}${mvRaw ? ` with mana value ${mvN === 'X' ? ctx.x : mvN}${mvCmp ? ` ${mvCmp}` : ''}` : ''}` }),
     );
   },
   (s) => {
@@ -1308,6 +1390,8 @@ function parseSentence(raw: string): Piece[] | null {
     .trim()
     .replace(/\.$/, '')
     .replace(/^you create /i, 'create ')
+    .replace(/^you (untap|tap) (all|each|target) /i, '$1 $2 ')
+    .replace(/^you may (return up to one target .+ from your graveyard to your hand)$/i, '$1')
     .replace(/^then (?=if )/i, '')
     .replace(/^you may (put (?:a|an) .+? card from your hand onto the battlefield)/i, '$1')
     .replace(/^it deals /i, 'cardname deals ')
@@ -1463,6 +1547,61 @@ function note(map: Map<string, number>, s: string) {
 }
 
 function parseEffect(text: string, def: CardDef, key: string, offset = 0): { targets: TargetSpec[]; effect: (ctx: Ctx) => void } | null {
+  // Sleight of Hand / Anticipate style: look at the top N, one to hand, the rest to the bottom (or graveyard).
+  const sl = text.match(/^look at the top (\w+) cards of your library\. put one of them into your hand and the (?:other|rest) (on the bottom of your library(?: in any order)?|into your graveyard)\.?$/i);
+  if (sl) {
+    const n = num(sl[1]);
+    if (typeof n === 'number') {
+      const rest = /graveyard/i.test(sl[2]) ? 'graveyard' : 'bottom';
+      return { targets: [], effect: (ctx) => ctx.lookAndTake(ctx.controller, n, 1, null, `Look at the top ${n}: choose one to put into your hand`, { exact: true, rest }) };
+    }
+  }
+  // Mana Drain.
+  if (/^counter target spell\. at the beginning of your next main phase, add an amount of \{c\} equal to that spell's mana value\.?$/i.test(text)) {
+    const k = `${key}:drain`;
+    def.handlers = { ...(def.handlers ?? {}), [k]: (ctx, _a, data) => ctx.addMana(ctx.controller, 'C', data?.n ?? 0) };
+    return {
+      targets: [{ kind: 'spell', label: 'spell to counter', bias: 'opponent' }],
+      effect: (ctx) => {
+        const t = ctx.targets[0];
+        const item = t && t.type === 'stack' ? ctx.state.stack.find((x) => x.id === t.id) : undefined;
+        if (!item) return;
+        const n = cmcOf(item.def);
+        ctx.counterSpell(item.id);
+        if (n > 0) ctx.delay('yourNextMain', k, { n });
+      },
+    };
+  }
+  // Windfall / Whirlpool Whirl: everyone discards, then draws the most anyone discarded (or the same number).
+  const wf = text.match(/^each player discards their hand, then draws (cards equal to the greatest number of cards a player discarded this way|that many cards|seven cards)\.?$/i);
+  if (wf) {
+    return {
+      targets: [],
+      effect: (ctx) => {
+        const counts = ctx.players().map((p) => {
+          const hand = [...getPlayer(ctx.state, p).hand];
+          for (const id of hand) ctx.moveCard(id, 'graveyard');
+          return [p, hand.length] as const;
+        });
+        const most = Math.max(0, ...counts.map(([, n]) => n));
+        for (const [p, n] of counts) ctx.draw(p, /greatest/i.test(wf[1]) ? most : /seven/i.test(wf[1]) ? 7 : n);
+      },
+    };
+  }
+  // "Target creature you control deals damage equal to its power to each other creature (and each opponent)."
+  const ig = text.match(/^(?:choose target creature you control\. it|target creature you control) deals damage equal to its power to each other creature( and each opponent)?\.?$/i);
+  if (ig) {
+    return {
+      targets: [{ kind: 'creature', filter: { controller: 'you' }, label: 'your creature', bias: 'self' }],
+      effect: (ctx) => {
+        const c = ctx.card(0);
+        if (!c) return;
+        const n = ctx.power(c);
+        for (const o of ctx.creatures()) if (o.id !== c.id) ctx.damageFrom(c.id, o.id, n);
+        if (ig[1]) for (const p of ctx.opponents()) ctx.damageFrom(c.id, p, n);
+      },
+    };
+  }
   const fc = text.match(/^if it's the first combat phase of (?:the|your) turn, (.+?)\. after this phase, there is an additional combat phase\.?$/i);
   if (fc) return parseEffect(`If it's the first combat phase of the turn, ${fc[1]} and there is an additional combat phase after this phase.`, def, key, offset);
   const flip = parseFlip(text, def, key, offset);
@@ -1543,7 +1682,7 @@ function parseActivationCost(raw: string): Cost | null {
   for (const part of raw.split(/,\s*/)) {
     const p = part.trim();
     if (/^(\{[0-9WUBRGCX]+\})+$/i.test(p)) {
-      if (/X/i.test(p)) return null;
+      if (/X/i.test(p) && !/^(\{X\})+(\{[0-9WUBRGC]+\})*$/i.test(p)) return null;
       cost.mana = p.toUpperCase();
     } else if (p === '{T}') cost.tap = true;
     else if (/^sacrifice (cardname)$/i.test(p)) cost.sacrificeSelf = true;
@@ -1857,6 +1996,7 @@ function attachedCount(phrase: string): ((state: GameState, src: CardInstance, c
 function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyword[]; dynamicPT?: CardDef['dynamicPT'] } | null {
   const l = line.replace(/\.$/, '');
   if (/^(?:metalcraft — )?equipment you control have equip \{0\} as long as you control three or more artifacts$/i.test(l)) return { statics: [{ kind: 'equipCost', set: 0, when: 'metalcraft' }] };
+  if (/^if you would draw a card while your library has no cards in it, you win the game instead$/i.test(l)) return { statics: [{ kind: 'emptyDrawWins' }] };
   if (/^treasures you control have "\{t\}, sacrifice (?:cardname|this artifact): add two mana of any one color\.?"$/i.test(l)) return { statics: [{ kind: 'treasureMana2' }] };
   // Variable power/toughness.
   let dm = l.match(/^cardname's (power|toughness|power and toughness) (?:is|are each) equal to (.+)$/i);
@@ -1935,6 +2075,12 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
     const kws = m[3] ? parseKeywordList(m[3]) : [];
     if (!kws) return null;
     return { statics: [{ kind: 'attached', power: +m[1], toughness: +m[2], keywords: kws }] };
+  }
+  m = l.match(/^(?:equipped|enchanted) creature can't be blocked(?: and has (.+))?$/i);
+  if (m) {
+    const kws = m[1] ? parseKeywordList(m[1]) : [];
+    if (!kws) return null;
+    return { statics: [{ kind: 'attached', keywords: ['Unblockable', ...kws] }] };
   }
   m = l.match(/^(?:equipped|enchanted) creature has (.+)$/i);
   if (m) {
@@ -2398,9 +2544,28 @@ function handleLine(
     return true;
   }
   if (/^partner(?: with .+)?$|^friends forever$|^choose a background$/i.test(l)) return true;
-  const cl = l.match(/^you may have cardname enter(?: the battlefield)? as a copy of (?:any|a) (creature|artifact|permanent)(?: on the battlefield)?$/i);
+  const cl = l.match(
+    /^you may have (?:cardname|\S+) enter(?: the battlefield)? as a copy of (?:any|a|an|another) (creature or planeswalker|artifact or creature|creature|artifact|permanent)( on the battlefield| you control)?(?:, except (.+))?$/i,
+  );
   if (cl) {
+    const except = (cl[3] ?? '').toLowerCase();
+    const ce: NonNullable<CardDef['cloneExcept']> = {};
+    // Exceptions we model; others that only change name/types are harmless to ignore.
+    for (const part of except.split(/, (?:and )?| and (?=it )/).map((x) => x.trim()).filter(Boolean)) {
+      if (/^it isn't legendary$/.test(part)) ce.notLegendary = true;
+      else if (/^it enters with an additional (?:\+1\/\+1|loyalty) counter on it/.test(part)) ce.counter = true;
+      else if (/^it has \S+'s other abilities$/.test(part)) ce.keepAbilities = true;
+      else if (/^it's an? (?:enchantment|artifact) in addition to its other types$/.test(part)) continue;
+      else if (/^its name is cardname$/.test(part) || /^it's legendary in addition to its other types$/.test(part)) continue;
+      else return false;
+    }
     def.cloneOf = cl[1].toLowerCase() as CardDef['cloneOf'];
+    if (/you control/i.test(cl[2] ?? '')) def.cloneYours = true;
+    if (ce.notLegendary || ce.counter || ce.keepAbilities) def.cloneExcept = ce;
+    return true;
+  }
+  if (/^the "legend rule" doesn't apply to permanents you control$/i.test(l)) {
+    def.statics!.push({ kind: 'noLegendRule' });
     return true;
   }
   if (/^storm$/i.test(l)) {
@@ -2481,6 +2646,38 @@ function handleLine(
         const pl = getPlayer(ctx.state, ctx.event.player);
         pl.poison += n;
         ctx.log(`${pl.name} gets ${n} poison counter${n > 1 ? 's' : ''} (${pl.poison}).`);
+      },
+    });
+    return true;
+  }
+  km = l.match(/^transmute ((?:\{[0-9WUBRGC]+\})+)$/i);
+  if (km) {
+    const mv = () => parseCost(def.cost).generic + (['W', 'U', 'B', 'R', 'G', 'C'] as const).reduce((a, c) => a + parseCost(def.cost)[c], 0);
+    def.handAbilities = [
+      ...(def.handAbilities ?? []),
+      {
+        text: `Transmute ${km[1].toUpperCase()}`,
+        cost: { mana: km[1].toUpperCase() },
+        sorcerySpeed: true,
+        effect: (ctx) => ctx.search({ filter: { custom: (_s, c) => cmcOf(c.def) === mv() }, max: 1, dest: 'hand', label: `Transmute: search for a card with mana value ${mv()}` }),
+      },
+    ];
+    return true;
+  }
+  km = l.match(/^cumulative upkeep ((?:\{[0-9WUBRGC]+\})+)$/i);
+  if (km) {
+    const unit = parseCost(km[1].toUpperCase());
+    const k = `${key}:cu`;
+    def.handlers = { ...(def.handlers ?? {}), [k]: (ctx) => ctx.self && ctx.moveCard(ctx.self.id, 'graveyard', { sacrifice: true }) };
+    def.triggers!.push({
+      on: 'yourUpkeep',
+      text: `Cumulative upkeep ${km[1].toUpperCase()}: add an age counter, then pay for each age counter or sacrifice this.`,
+      effect: (ctx) => {
+        if (!ctx.self) return;
+        ctx.addCounters(ctx.self, 'age', 1);
+        const n = ctx.self.counters.age ?? 1;
+        const total = [unit.generic * n ? `{${unit.generic * n}}` : '', ...(['W', 'U', 'B', 'R', 'G', 'C'] as const).flatMap((c) => Array(unit[c] * n).fill(`{${c}}`))].join('');
+        ctx.unlessPays(ctx.controller, total || '{0}', k);
       },
     });
     return true;
@@ -2707,6 +2904,13 @@ function handleLine(
   // Activated abilities "cost: effect".
   m = line.match(/^([^:"]+?): (.+)$/);
   if (m && !/^(when|whenever|at) /i.test(line)) {
+    const lx = m[1].trim().match(/^\[?[−-]X\]?$/);
+    if (lx) {
+      const eff = parseEffect(m[2].replace(/\.$/, ''), def, key);
+      if (!eff) return false;
+      def.abilities!.push({ text: original, cost: { loyalty: 0, loyaltyX: true }, targets: eff.targets, effect: eff.effect, sorcerySpeed: true, aiValue: 0 });
+      return true;
+    }
     const lm = m[1].trim().match(/^\[?([+−-]?)(\d+)\]?$/);
     if (lm) {
       // Planeswalker loyalty ability: sorcery speed, once per turn per planeswalker.

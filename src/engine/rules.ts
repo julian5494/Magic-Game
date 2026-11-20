@@ -1,12 +1,12 @@
 import type { TriggeredAbility } from './cardtypes';
 import {
-  createToken, dealDamage, drawCards, isStillLegal, legalTargets, makeCtx, moveCard, pushEvent, queueDecision, setPlayerLoses,
+  createToken, dealDamage, drawCards, isStillLegal, legalTargets, makeCtx, moveCard, pushEvent, queueDecision, runCardHandler, setPlayerLoses,
 } from './ops';
 import { emptyPool } from './mana';
 import { getDef } from './registry';
 import {
   alivePlayers, apnapOrder, battlefieldCards, cantAttackOrBlock, controllerHasStatic, defOf, getKeywords, getPlayer,
-  getPT, hasKeyword, hasType, isLegendary, log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot,
+  getPT, hasKeyword, hasType, isLegendary, log, matchesFilter, newId, nextPlayer, opponentsOf, protectedFrom, snapshot, defColors,
 } from './state';
 import type {
   CardInstance, GameEvent, GameState, PendingTrigger, PlayerId, Snapshot, StackItem, Step, Target,
@@ -540,7 +540,7 @@ export function checkStateBased(state: GameState): boolean {
   // Legend rule: keep the newest.
   const legends = new Map<string, CardInstance[]>();
   for (const c of battlefieldCards(state)) {
-    if (!isLegendary(c)) continue;
+    if (!isLegendary(c) || controllerHasStatic(state, c.controller, 'noLegendRule')) continue;
     const key = `${c.controller}|${c.def}`;
     legends.set(key, [...(legends.get(key) ?? []), c]);
   }
@@ -599,7 +599,23 @@ export function canBlock(state: GameState, blocker: CardInstance, attacker: Card
   if (akw.includes('Unblockable')) return false;
   const bkw = getKeywords(state, blocker);
   if (akw.includes('Flying') && !bkw.includes('Flying') && !bkw.includes('Reach')) return false;
+  if (protectedFrom(state, attacker, defColors(defOf(blocker)))) return false;
   return true;
+}
+
+/** Run delayed effects that wait for this step. */
+function runDelayed(state: GameState, step: Step): void {
+  if (!state.delayed?.length) return;
+  const ap = state.activePlayer;
+  const due = state.delayed.filter(
+    (d) =>
+      (d.when === 'nextEnd' && step === 'end') ||
+      (d.when === 'yourNextMain' && (step === 'main1' || step === 'main2') && ap === d.player && (state.turn > d.turn || step === 'main2')) ||
+      (d.when === 'yourNextUpkeep' && step === 'upkeep' && ap === d.player && state.turn > d.turn),
+  );
+  if (!due.length) return;
+  state.delayed = state.delayed.filter((d) => !due.includes(d));
+  for (const d of due) runCardHandler(state, { ctx: d.ctx, key: d.key, extra: d.extra }, {});
 }
 
 function enterStep(state: GameState, step: Step): void {
@@ -607,6 +623,7 @@ function enterStep(state: GameState, step: Step): void {
   state.priority = null;
   state.passes = [];
   for (const p of state.players) p.manaPool = emptyPool();
+  runDelayed(state, step);
   const ap = state.activePlayer;
   switch (step) {
     case 'untap':

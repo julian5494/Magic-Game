@@ -5,7 +5,7 @@ import {
   drawCards, gainLife, legalTargets, loseLife, makeCard, makeCtx, manaMultiplier, moveCard, pushEvent, queueDecision, runCardHandler,
   sameTarget, shuffle, tapPermanent,
 } from './ops';
-import { getDef } from './registry';
+import { findDef, getDef, registerCards } from './registry';
 import {
   advanceStep, canAttack, canBlock, checkStateBased, collectTriggers, finishCleanup, getTrigger, playerLoses,
   processTriggers, putTriggerOnStack, resolveTop, startTurn,
@@ -47,9 +47,32 @@ function markUsed(state: GameState, c: CardInstance, ab: ActivatedAbility, index
   if (ab.onceEachTurn) c.usedOnTurn = { ...(c.usedOnTurn ?? {}), [`a${index}`]: state.turn };
 }
 
+/** A copy that keeps the copier's own abilities too (Sakashima of a Thousand Faces). */
+function mergedCopyDef(copied: string, copier: string): string {
+  const name = `${copied} (${copier.split(/[ ,]/)[0]})`;
+  if (!findDef(name)) {
+    const a = getDef(copied);
+    const b = getDef(copier);
+    registerCards([
+      {
+        ...a,
+        name,
+        displayName: a.name,
+        equip: undefined,
+        statics: [...(a.statics ?? []), ...(b.statics ?? [])],
+        triggers: [...(a.triggers ?? []), ...(b.triggers ?? [])],
+        abilities: [...(a.abilities ?? []), ...(b.abilities ?? [])],
+        handlers: { ...(b.handlers ?? {}), ...(a.handlers ?? {}) },
+      },
+    ]);
+  }
+  return name;
+}
+
 /** An ability's mana cost after equip-cost changes (Puresteel Paladin, Bruenor, "equip abilities cost {2} less"). */
-export function abilityMana(state: GameState, pid: PlayerId, ab: ActivatedAbility): string | undefined {
-  const cost = ab.cost.mana;
+export function abilityMana(state: GameState, pid: PlayerId, ab: ActivatedAbility, x = 0): string | undefined {
+  let cost = ab.cost.mana;
+  if (cost && /\{X\}/i.test(cost)) cost = cost.replace(/\{X\}/gi, x > 0 ? `{${x}}` : '') || undefined;
   if (!cost || !ab.equip) return cost;
   let generic = Number(cost.match(/^\{(\d+)\}/)?.[1] ?? 0);
   const colored = cost.replace(/^\{\d+\}/, '');
@@ -449,6 +472,17 @@ function abilityAction(
   const exclude = ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : [];
   const manaCost = abilityMana(state, pid, ab);
   if (manaCost && !canPay(state, pid, parseCost(manaCost), exclude)) return null;
+  // X in the cost: the most the player could pay.
+  let xMax: number | undefined;
+  if (ab.cost.loyaltyX) xMax = card.counters.loyalty ?? 0;
+  else if (ab.cost.mana && /\{X\}/i.test(ab.cost.mana)) {
+    xMax = 0;
+    for (let x = 1; x <= 30; x++) {
+      const c = abilityMana(state, pid, ab, x);
+      if (c && canPay(state, pid, parseCost(c), exclude)) xMax = x;
+      else break;
+    }
+  }
   let targets = specViews(state, ab.targets, pid, card.id);
   if (!targets) return null;
   if (ab.equip) {
@@ -463,6 +497,7 @@ function abilityAction(
     targets,
     sacrificeOptions,
     sacrificeLabel: sacrificeOptions ? 'Choose a permanent to sacrifice' : undefined,
+    xMax,
   };
 }
 
@@ -626,14 +661,15 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       if (!action.sacrifice || !a.sacrificeOptions!.includes(action.sacrifice)) throw new RulesError('Choose a permanent to sacrifice');
     }
     markUsed(state, card, ab, action.ability);
+    const x = a.xMax !== undefined ? Math.max(0, Math.min(action.x ?? 0, a.xMax)) : 0;
     if (ab.cost.loyalty !== undefined) {
-      card.counters.loyalty = (card.counters.loyalty ?? 0) + ab.cost.loyalty;
+      card.counters.loyalty = (card.counters.loyalty ?? 0) + ab.cost.loyalty - (ab.cost.loyaltyX ? x : 0);
       card.usedOnTurn = { ...(card.usedOnTurn ?? {}), loyalty: state.turn };
     }
     const inc = card.inc;
     const sourceSnap = snapshot(state, card);
     const mult = manaMultiplier(state, card);
-    const manaCost = abilityMana(state, pid, ab);
+    const manaCost = abilityMana(state, pid, ab, x);
     if (manaCost) pay(state, pid, parseCost(manaCost), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
     if (ab.equip) p.equipTurn = state.turn;
     if (ab.cost.tap) tapPermanent(state, card);
@@ -668,6 +704,7 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       text: ab.text,
       sacrificed,
       sourceSnapshot: sourceSnap,
+      x: a.xMax !== undefined ? x : undefined,
     });
     log(state, `${p.name} activates ${def.name}: ${ab.text}${describeTargets(state, targets)}.`);
     checkWard(state, pid, state.stack[state.stack.length - 1]);
@@ -931,8 +968,16 @@ const HANDLERS: Record<string, Handler> = {
     if (!c || c.inc !== d.data.inc || c.zone !== 'battlefield') return;
     const pick = a.cards?.[0] ? state.cards[a.cards[0]] : null;
     if (pick) {
+      const own = defOf(c);
+      const except = own.cloneExcept;
       c.frontDef = c.frontDef ?? c.def;
-      c.def = pick.def;
+      c.def = except?.keepAbilities ? mergedCopyDef(pick.def, own.name) : pick.def;
+      if (except?.notLegendary) c.copyNotLegendary = true;
+      if (except?.counter) {
+        if (hasType(c, 'Creature')) c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + 1;
+        if (hasType(c, 'Planeswalker')) c.counters.loyalty = (c.counters.loyalty ?? 0) + 1;
+      }
+      if (hasType(c, 'Planeswalker') && !c.counters.loyalty) c.counters.loyalty = defOf(c).loyalty ?? 0;
       log(state, `${c.frontDef} enters as a copy of ${pick.def}.`);
     }
     pushEvent(state, { t: 'etb', card: c.id, controller: c.controller });

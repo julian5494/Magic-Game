@@ -35,7 +35,10 @@ export type Keyword =
   /** Doesn't untap during its controller's untap step. */
   | 'NoUntap'
   /** While on the stack, players can't cast spells or activate non-mana abilities. */
-  | 'Split second';
+  | 'Split second'
+  /** Protection from a color: can't be blocked, targeted, or dealt damage by sources of that color. */
+  | 'ProW' | 'ProU' | 'ProB' | 'ProR' | 'ProG'
+  /** "Can't be blocked." is 'Unblockable'. */;
 
 export type ZoneName = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'command' | 'stack';
 
@@ -102,6 +105,8 @@ export interface CardInstance {
   dashed?: boolean;
   /** Front-face definition while this card is showing its back face or copying something. */
   frontDef?: string;
+  /** A copy that isn't legendary (Spark Double). */
+  copyNotLegendary?: boolean;
   /** May be played from exile by this player until the end of this turn number (impulse draw). */
   playableBy?: { player: PlayerId; untilTurn: number };
   /** Turn on which each once-per-turn ability (key) was last used. */
@@ -333,6 +338,8 @@ export interface GameState {
   extraCombats?: { afterMain: number; afterCombat: number };
   /** Combat phases begun this turn ("if it's the first combat phase of the turn"). */
   combatsThisTurn?: number;
+  /** Delayed effects ("at the beginning of the next end step, ..."): a card handler to run then. */
+  delayed?: { when: 'nextEnd' | 'yourNextMain' | 'yourNextUpkeep'; player: PlayerId; turn: number; ctx: any; key: string; extra?: any }[];
   /** Creatures that died this turn (Mahadi). */
   diedThisTurn?: number;
   /** Spells cast during the previous turn (werewolves). */

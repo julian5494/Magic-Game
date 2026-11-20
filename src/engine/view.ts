@@ -123,7 +123,7 @@ export function cardView(state: GameState, c: CardInstance): CardView {
   const pt = hasType(c, 'Creature') ? (onBf ? getPT(state, c) : { power: def.power ?? 0, toughness: def.toughness ?? 0 }) : null;
   return {
     id: c.id,
-    name: def.name,
+    name: def.displayName ?? def.name,
     cost: def.cost,
     typeLine: typeLine(def),
     types: def.types,

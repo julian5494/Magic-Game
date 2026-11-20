@@ -94,7 +94,7 @@ export interface Ctx {
     player?: PlayerId;
     filter: CardFilter;
     max: number;
-    dest: 'battlefield' | 'hand' | 'top';
+    dest: 'battlefield' | 'hand' | 'top' | 'graveyard';
     tapped?: boolean;
     label: string;
     /** Cultivate-style split: first chosen to battlefield tapped, rest to hand. */
@@ -134,6 +134,8 @@ export interface Ctx {
   winGame(player: PlayerId): void;
   /** Continue in def.handlers[key] once every pending choice has been made. */
   defer(key: string): void;
+  /** Run def.handlers[key] later: at the next end step, or the beginning of your next main phase / upkeep. */
+  delay(when: 'nextEnd' | 'yourNextMain' | 'yourNextUpkeep', key: string, data?: any): void;
 }
 
 export type Effect = (ctx: Ctx) => void;
@@ -158,6 +160,8 @@ export interface Cost {
   life?: number;
   /** Planeswalker loyalty cost (+1, -2, 0). */
   loyalty?: number;
+  /** "−X": remove X loyalty counters (X chosen when activating). */
+  loyaltyX?: boolean;
 }
 
 export interface ActivatedAbility {
@@ -261,6 +265,10 @@ export type StaticAbility =
   | { kind: 'equipCost'; set?: number; reduce?: number; when?: 'metalcraft' | 'firstEachTurn' }
   /** "Your opponents can't cast spells during your turn." (whileAttached: only while this is attached to a creature) */
   | { kind: 'oppsNoCastYourTurn'; whileAttached?: boolean }
+  /** "The legend rule doesn't apply to permanents you control." */
+  | { kind: 'noLegendRule' }
+  /** Laboratory Maniac: drawing from an empty library wins the game instead. */
+  | { kind: 'emptyDrawWins' }
   | { kind: 'noMaxHandSize' }
   | { kind: 'extraLand'; n: number }
   | { kind: 'preventNoncombatDamageToOtherCreatures' }
@@ -355,7 +363,12 @@ export interface CardDef {
   /** This definition is the back face of a transforming card (can't be cast or put in a deck by itself). */
   isBackFace?: boolean;
   /** "You may have this enter as a copy of any <kind> on the battlefield." */
-  cloneOf?: 'creature' | 'artifact' | 'permanent';
+  /** Name shown to players when it differs from the internal name (merged copies). */
+  displayName?: string;
+  cloneOf?: 'creature' | 'artifact' | 'permanent' | 'creature or planeswalker' | 'artifact or creature';
+  /** Clone only something you control; exceptions to the copy (Spark Double). */
+  cloneYours?: boolean;
+  cloneExcept?: { notLegendary?: boolean; counter?: boolean; keepAbilities?: boolean };
   /** "enters with N counters on it" (n 'X' = the X paid). */
   etbCounters?: { kind: string; n: number | 'X' };
   /** Unparsed text includes a drawback, so the card can't be played (rather than played without it). */

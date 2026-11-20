@@ -2,10 +2,10 @@ import type { CardFilter, Ctx, TargetSpec } from './cardtypes';
 import { getDef } from './registry';
 import {
   alivePlayers, battlefieldCards, cmc, commanderIdentity, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
-  hasType, log, matchesFilter, newId, opponentsOf, snapshot,
+  hasType, log, matchesFilter, newId, opponentsOf, protectedFrom, defColors, snapshot,
 } from './state';
 import type {
-  CardId, CardInstance, Decision, DecisionAnswer, GameEvent, GameState, Keyword, ManaSym, PlayerId,
+  CardId, CardInstance, CardType, Decision, DecisionAnswer, GameEvent, GameState, Keyword, ManaSym, PlayerId,
   Snapshot, Target, ZoneName,
 } from './types';
 
@@ -126,6 +126,7 @@ export function moveCard(
   card.eotControlOf = null;
   card.evoked = false;
   card.dashed = false;
+  card.copyNotLegendary = false;
   if (to !== 'stack') card.x = undefined;
   if (from === 'battlefield') card.linked = [];
   card.controller = to === 'battlefield' || to === 'stack' ? opts.controller ?? card.owner : card.owner;
@@ -152,8 +153,12 @@ export function moveCard(
         data: { card: id, inc: card.inc },
       }, true);
     }
+    const cloneTypes: CardType[] | null =
+      def.cloneOf === 'permanent' ? null : def.cloneOf === 'creature or planeswalker' ? ['Creature', 'Planeswalker'] : def.cloneOf === 'artifact or creature' ? ['Artifact', 'Creature'] : def.cloneOf === 'artifact' ? ['Artifact'] : ['Creature'];
     const cloneOptions = def.cloneOf
-      ? battlefieldCards(state).filter((c) => c.id !== id && (def.cloneOf === 'permanent' || hasType(c, def.cloneOf === 'creature' ? 'Creature' : 'Artifact')))
+      ? battlefieldCards(state).filter(
+          (c) => c.id !== id && (!def.cloneYours || c.controller === card.controller) && (!cloneTypes || cloneTypes.some((t) => hasType(c, t))),
+        )
       : [];
     if (cloneOptions.length) {
       // The copy choice is made as it enters; its enters-the-battlefield event fires after the choice.
@@ -213,6 +218,11 @@ export function drawCards(state: GameState, pid: PlayerId, n: number): void {
   let drawn = 0;
   for (let i = 0; i < n; i++) {
     if (p.library.length === 0) {
+      if (controllerHasStatic(state, pid, 'emptyDrawWins')) {
+        log(state, `${p.name} would draw from an empty library, and wins the game instead!`);
+        for (const q of state.players) if (q.id !== pid && !q.lost) playerLosesRef(state, q.id, `${p.name} won the game`);
+        return;
+      }
       p.drewFromEmpty = true;
       break;
     }
@@ -307,6 +317,10 @@ export function dealDamage(
       }
     }
     if (!hasType(c, 'Creature')) return;
+    if (protectedFrom(state, c, defColors(defOf(source)))) {
+      log(state, `Protection prevents the damage to ${c.def}.`);
+      return;
+    }
     if (!combat && c.id !== source.id && controllerHasStatic(state, c.controller, 'preventNoncombatDamageToOtherCreatures')) {
       const preventer = battlefieldCards(state).find(
         (x) => x.controller === c.controller && (defOf(x).statics ?? []).some((s) => s.kind === 'preventNoncombatDamageToOtherCreatures'),
@@ -381,10 +395,12 @@ export function addMana(state: GameState, pid: PlayerId, sym: ManaSym, n: number
 
 // ---------- Targeting ----------
 
-function targetableBy(state: GameState, card: CardInstance, controller: PlayerId): boolean {
+function targetableBy(state: GameState, card: CardInstance, controller: PlayerId, source?: CardId): boolean {
   const kws = getKeywords(state, card);
   if (kws.includes('Shroud')) return false;
   if (kws.includes('Hexproof') && card.controller !== controller) return false;
+  const src = source ? state.cards[source] : undefined;
+  if (src && protectedFrom(state, card, defColors(defOf(src)))) return false;
   return true;
 }
 
@@ -395,7 +411,7 @@ export function legalTargets(state: GameState, spec: TargetSpec, controller: Pla
       (c) =>
         (!types || types.some((t) => hasType(c, t))) &&
         matchesFilter(state, c, spec.filter, controller, source) &&
-        targetableBy(state, c, controller),
+        targetableBy(state, c, controller, source),
     );
   switch (spec.kind) {
     case 'creature':
@@ -875,6 +891,9 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
     },
     defer(key) {
       (state.continuations ??= []).push({ ctx: cardData, key });
+    },
+    delay(when, key, data) {
+      (state.delayed ??= []).push({ when, player: init.controller, turn: state.turn, ctx: cardData, key, extra: data });
     },
     chooseCards(p, prompt, cards, min, max, key, data, privateCards) {
       queueDecision(state, {
