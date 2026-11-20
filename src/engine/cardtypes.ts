@@ -78,7 +78,7 @@ export interface Ctx {
   addCounters(card: CardInstance | CardId | null, kind: string, n: number): void;
   createToken(player: PlayerId, tokenName: string, n?: number): CardInstance[];
   mill(player: PlayerId, n: number): void;
-  moveCard(card: CardId, to: ZoneName, opts?: { tapped?: boolean; controller?: PlayerId; bottom?: boolean }): void;
+  moveCard(card: CardId, to: ZoneName, opts?: { tapped?: boolean; controller?: PlayerId; bottom?: boolean; sacrifice?: boolean }): void;
   addMana(player: PlayerId, sym: ManaSym, n: number): void;
   gainControlUntilEndOfTurn(card: CardInstance | null): void;
   fight(a: CardInstance | null, b: CardInstance | null): void;
@@ -219,6 +219,11 @@ export type TriggerOn =
   | 'anyEtb' // any permanent enters (use `condition` to narrow)
   | 'anyDies' // any creature dies (use `condition` to narrow)
   | 'youWinFlip'
+  | 'youSacrifice' // you sacrifice a permanent (use `condition` to narrow)
+  | 'anySacrifice' // any player sacrifices a permanent
+  | 'anyToGraveyard' // any permanent goes to a graveyard from the battlefield (use `condition`)
+  | 'becomesTarget' // this becomes the target of a spell or ability (use `condition` to narrow)
+  | 'anyLeaves' // any permanent leaves the battlefield (use `condition`)
   | 'youLoseFlip'
   | 'anyWinsFlip';
 
@@ -233,6 +238,8 @@ export interface TriggeredAbility {
   effect: Effect;
   /** "This ability triggers only once each turn." */
   onceEachTurn?: boolean;
+  /** "Whenever one or more ...": events that happen together trigger it once. */
+  batched?: boolean;
 }
 
 export type StaticAbility =
@@ -260,6 +267,16 @@ export type StaticAbility =
   | { kind: 'costMod'; filter: CardFilter; delta: number; whose: 'you' | 'opponents' | 'all' }
   /** Doubling Season / Parallel Lives: your tokens are created twice over. */
   | { kind: 'tokenDouble' }
+  /** Xorn: one more Treasure whenever you create Treasures. */
+  | { kind: 'treasureExtra' }
+  /** Academy Manufactor: a Clue, Food or Treasure becomes one of each. */
+  | { kind: 'clueFoodTreasure' }
+  /** Goldspan Dragon: your Treasures add two mana of one color. */
+  | { kind: 'treasureMana2' }
+  /** Untap these permanents you control during each other player's untap step (Unwinding Clock, Drumbellower; self: Victory Chimes). */
+  | { kind: 'untapOthersStep'; filter?: CardFilter; self?: boolean }
+  /** Thousand-Year Elixir: activate abilities of your creatures as though they had haste. */
+  | { kind: 'abilityHaste' }
   /** Boon Reflection: you gain twice as much life. */
   | { kind: 'lifeDouble' }
   /** Krark's Thumb: flip two coins and keep the one you like. */

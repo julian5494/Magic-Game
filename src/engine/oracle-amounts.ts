@@ -61,6 +61,8 @@ export function parseCount(raw: string): Expr | null {
   if (/^cards? in your hand$/.test(l)) return (s, c) => getPlayer(s, c).hand.length;
   if (/^opponents? you have$|^opponents?$/.test(l)) return (s, c) => opponentsOf(s, c).length;
   if (/^players?$/.test(l)) return (s) => s.players.filter((x) => !x.lost).length;
+  if (/^creatures? that died this turn$/.test(l)) return (s) => s.diedThisTurn ?? 0;
+  if (/^spells? you've cast this turn$/.test(l)) return (s, c) => getPlayer(s, c).spellsCast ?? 0;
   if ((m = p.match(/^(.*?)\s*cards? in your graveyard$/i))) return cardsIn('graveyard', m[1], 'your');
   if ((m = p.match(/^(.*?)\s*cards? in all graveyards$/i))) return cardsIn('graveyard', m[1], 'all');
   if ((m = p.match(/^(.*?)\s*cards? in your hand$/i))) return cardsIn('hand', m[1], 'your');

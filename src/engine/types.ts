@@ -146,6 +146,11 @@ export interface Player {
   /** Turn of this player's last coin flip (Edgar: the first flips each turn win). */
   flipTurn?: number;
   lifeGainedThisTurn: number;
+  /** Spells this player cast this turn (all, and noncreature). */
+  spellsCast?: number;
+  noncreatureCast?: number;
+  /** Turn this player last created a token. */
+  tokenTurn?: number;
   /** Extra land drops granted this turn ("You may play an additional land this turn"). */
   extraLandsThisTurn?: number;
 }
@@ -195,9 +200,9 @@ export interface Snapshot {
 
 export type GameEvent =
   | { t: 'etb'; card: CardId; controller: PlayerId }
-  | { t: 'leaves'; card: CardId; snap: Snapshot; to: ZoneName }
+  | { t: 'leaves'; card: CardId; snap: Snapshot; to: ZoneName; /** Set when it was sacrificed (by this player). */ sac?: PlayerId }
   | { t: 'attacks'; card: CardId; defender: PlayerId; alone: boolean }
-  | { t: 'cast'; card: CardId; controller: PlayerId; def: string }
+  | { t: 'cast'; card: CardId; controller: PlayerId; def: string; /** This player's Nth spell this turn, and Nth noncreature spell. */ nth?: number; nthNoncreature?: number }
   | { t: 'gainLife'; player: PlayerId; amount: number }
   | { t: 'combatDamagePlayer'; source: CardId; player: PlayerId; amount: number }
   | { t: 'step'; step: Step; active: PlayerId }
@@ -205,7 +210,8 @@ export type GameEvent =
   | { t: 'draw'; player: PlayerId }
   | { t: 'discard'; player: PlayerId; card: CardId }
   | { t: 'attackDeclared'; player: PlayerId; count: number }
-  | { t: 'coinFlip'; player: PlayerId; won: boolean };
+  | { t: 'coinFlip'; player: PlayerId; won: boolean }
+  | { t: 'targeted'; card: CardId; by: PlayerId; spell: boolean };
 
 export interface PendingTrigger {
   source: CardId;
@@ -321,6 +327,8 @@ export interface GameState {
   startingLife: number;
   /** Spells cast this turn (for storm). */
   spellsThisTurn?: number;
+  /** Creatures that died this turn (Mahadi). */
+  diedThisTurn?: number;
   /** Spells cast during the previous turn (werewolves). */
   spellsLastTurn?: number;
   /** The monarch draws an extra card at their end step; dealing combat damage to them steals it. */

@@ -10,8 +10,8 @@ import type {
 import { parseCost } from './mana';
 import { parseCount, parseExpr } from './oracle-amounts';
 import { findDef, getDef, registerCards } from './registry';
-import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf } from './state';
-import type { CardType, Color, GameState, Keyword, ManaSym, PlayerId, Supertype, Target } from './types';
+import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf, snapshot } from './state';
+import type { CardType, Color, GameState, Keyword, ManaSym, PlayerId, Snapshot, Supertype, Target } from './types';
 import { legalTargets, makeCtx } from './ops';
 
 export interface ScryFace {
@@ -174,6 +174,13 @@ function addCustom(f: CardFilter, fn: NonNullable<CardFilter['custom']>) {
   f.custom = prev ? (s, c, ctl, src) => prev(s, c, ctl, src) && fn(s, c, ctl, src) : fn;
 }
 
+/** Subtypes that aren't creature types, and the card type they belong to. */
+const SUBTYPE_TYPE: Record<string, CardType> = Object.fromEntries([
+  ...['Treasure', 'Food', 'Clue', 'Blood', 'Equipment', 'Vehicle', 'Gold', 'Map', 'Powerstone', 'Incubator', 'Fortification', 'Junk'].map((x) => [x, 'Artifact']),
+  ...['Aura', 'Saga', 'Class', 'Shrine', 'Curse', 'Room', 'Case', 'Role', 'Background', 'Cartouche'].map((x) => [x, 'Enchantment']),
+  ...['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Gate', 'Desert', 'Cave', 'Town', 'Sphere', 'Locus', 'Lair'].map((x) => [x, 'Land']),
+]) as Record<string, CardType>;
+
 /** "nonland permanent", "artifact or enchantment", "attacking or blocking creature", "Goblins". */
 function parseNouns(phrase: string): { types?: CardType[]; filter: CardFilter } | null {
   let p = phrase.trim().replace(/ and\/or /g, ' or ');
@@ -194,8 +201,10 @@ function parseNouns(phrase: string): { types?: CardType[]; filter: CardFilter } 
     else if (noun === 'permanent') anyPermanent = true;
     else if (noun === 'card') anyPermanent = true;
     else if (/^[A-Z]/.test(original)) {
-      filter.subtypes = [...(filter.subtypes ?? []), singularSubtype(original)];
-      if (!types.includes('Creature')) types.push('Creature');
+      const sub = singularSubtype(original);
+      filter.subtypes = [...(filter.subtypes ?? []), sub];
+      const t = SUBTYPE_TYPE[sub] ?? 'Creature';
+      if (!types.includes(t)) types.push(t);
     } else return null;
     for (const a of adjs) {
       const w = a.toLowerCase();
@@ -213,7 +222,8 @@ function parseNouns(phrase: string): { types?: CardType[]; filter: CardFilter } 
       else if (w.startsWith('non') && TYPE_WORDS[w.slice(3)]) filter.notTypes = [...(filter.notTypes ?? []), TYPE_WORDS[w.slice(3)]];
       else if (w.startsWith('non') && COLOR_WORDS[w.slice(3)]) filter.notColors = [...(filter.notColors ?? []), COLOR_WORDS[w.slice(3)]];
       else if (COLOR_WORDS[w]) filter.colors = [...(filter.colors ?? []), COLOR_WORDS[w]];
-      else if (TYPE_WORDS[w] && i === alts.length - 1) types.push(TYPE_WORDS[w]); // "artifact creature"
+      else if (TYPE_WORDS[w] && alts.length === 1) addCustom(filter, (_s, c) => hasType(c, TYPE_WORDS[w])); // "artifact creature": both
+      else if (TYPE_WORDS[w] && i === alts.length - 1) types.push(TYPE_WORDS[w]);
       else if (/^[A-Z]/.test(a)) filter.subtypes = [...(filter.subtypes ?? []), a];
       else return null;
     }
@@ -259,13 +269,15 @@ function parseTargets(phrase: string, bias: 'opponent' | 'self'): TargetSpec[] |
 }
 
 function singularPhrase(p: string): string {
-  return p.replace(/\b(creatures|permanents|artifacts|enchantments|lands|players|opponents|spells|cards)\b/gi, (w) => singular(w.toLowerCase()));
+  return p.replace(/(your opponents control)|\b(creatures|permanents|artifacts|enchantments|lands|players|opponents|spells|cards)\b/gi, (w, keep) => keep ?? singular(w.toLowerCase()));
 }
 
 // ---------- Effects ----------
 
 interface Scratch {
   lastId?: string;
+  /** Every card a mass effect just moved ("They gain haste until end of turn"). */
+  lastIds?: string[];
   lastController?: PlayerId;
   lastPower?: number;
   lastToughness?: number;
@@ -548,6 +560,30 @@ const SENTENCES: SentenceParser[] = [
     return action(m[1], 'opponent', (ctx, id) => ctx.moveCard(id, 'library', { bottom }));
   },
   // Graveyard recursion
+  (s) => {
+    const m = s.match(/^return all (.*?)\s*cards from your graveyard to (your hand|the battlefield(?: under your control)?)( tapped)?$/i);
+    if (!m) return null;
+    const o = m[1] ? parseNouns(m[1]) : { types: undefined, filter: {} as CardFilter };
+    if (!o) return null;
+    const toBf = /battlefield/i.test(m[2]);
+    return {
+      targets: [],
+      run: (ctx, _b, sc) => {
+        const ids = getPlayer(ctx.state, ctx.controller).graveyard.filter((id) => {
+          const c = ctx.state.cards[id];
+          return c && matchesFilter(ctx.state, c, { ...o.filter, types: o.types }, ctx.controller, ctx.source) && (!toBf || !findDef(c.def)?.types.every((t) => t === 'Instant' || t === 'Sorcery'));
+        });
+        for (const id of ids) ctx.moveCard(id, toBf ? 'battlefield' : 'hand', toBf ? { controller: ctx.controller, tapped: !!m[3] } : {});
+        sc.lastIds = ids;
+      },
+    };
+  },
+  (s) => {
+    const m = s.match(/^they gain (.+?) until end of turn$/i);
+    const kws = m && parseKeywordList(m[1]);
+    if (!kws) return null;
+    return { targets: [], run: (ctx, _b, sc) => (sc.lastIds ?? []).forEach((id) => ctx.state.cards[id]?.zone === 'battlefield' && ctx.pump(id, 0, 0, kws)) };
+  },
   (s) => {
     const m = s.match(/^return (.+? from (?:your|a) graveyard) to (your hand|the battlefield(?: under your control)?)$/i);
     if (!m) return null;
@@ -908,7 +944,7 @@ const SENTENCES: SentenceParser[] = [
   },
   // "Draw a card unless that player pays {1}" (Rhystic Study, Smothering Tithe style taxes)
   (s) => {
-    const m = s.match(/^(draw a card|create a treasure token) unless (that player|its controller) pays (\{[0-9WUBRGC]+\}(?:\{[0-9WUBRGC]+\})*)$/i);
+    const m = s.match(/^(draw a card|create a treasure token) unless (that player|its controller) pays (\{[0-9WUBRGCX]+\}(?:\{[0-9WUBRGC]+\})*)$/i);
     if (!m) return null;
     const subject = m[2];
     const k = hkey();
@@ -918,7 +954,7 @@ const SENTENCES: SentenceParser[] = [
       run: (ctx, base, sc) => {
         const who = players(subject);
         const payer = typeof who === 'function' ? who(ctx, base, sc)[0] : null;
-        if (payer && payer !== ctx.controller) ctx.unlessPays(payer, m[3].toUpperCase(), k);
+        if (payer && payer !== ctx.controller) ctx.unlessPays(payer, m[3].toUpperCase().replace('{X}', `{${ctx.x}}`), k);
       },
       handlers: {
         [k]: (ctx) => {
@@ -996,6 +1032,16 @@ const SENTENCES: SentenceParser[] = [
     };
   },
   (s) => (/^investigate$/i.test(s) ? { targets: [], run: (ctx) => void ctx.createToken(ctx.controller, 'Clue Token') } : null),
+  (s) =>
+    /^put your commander into your hand from the command zone$/i.test(s)
+      ? {
+          targets: [],
+          run: (ctx) => {
+            const cmd = getPlayer(ctx.state, ctx.controller).command.find((id) => ctx.state.cards[id]?.commander);
+            if (cmd) ctx.moveCard(cmd, 'hand');
+          },
+        }
+      : null,
   (s) => {
     const m = s.match(/^gain (\w+) life$/i);
     const n = m && num(m[1]);
@@ -1008,7 +1054,7 @@ const SENTENCES: SentenceParser[] = [
       run: (ctx, _b, sc) => {
         const id = /cardname/i.test(s) ? ctx.self?.id : sc.lastId ?? ctx.self?.id;
         const c = id ? ctx.state.cards[id] : null;
-        if (c && c.zone === 'battlefield') ctx.moveCard(c.id, 'graveyard');
+        if (c && c.zone === 'battlefield') ctx.moveCard(c.id, 'graveyard', { sacrifice: true });
       },
     };
   },
@@ -1190,7 +1236,12 @@ function amountSentence(s: string): Piece[] | null {
 }
 
 function parseSentence(raw: string): Piece[] | null {
-  const s = raw.trim().replace(/\.$/, '');
+  const s = raw
+    .trim()
+    .replace(/\.$/, '')
+    .replace(/^you create /i, 'create ')
+    .replace(/^it deals /i, 'cardname deals ')
+    .replace(/^for each (.+?), (.+)$/i, '$2 for each $1');
   if (!s) return [];
   if (IGNORABLE.some((r) => r.test(s))) return [];
   for (const p of SENTENCES) {
@@ -1419,8 +1470,8 @@ function parseActivationCost(raw: string): Cost | null {
       cost.mana = p.toUpperCase();
     } else if (p === '{T}') cost.tap = true;
     else if (/^sacrifice (cardname)$/i.test(p)) cost.sacrificeSelf = true;
-    else if (/^sacrifice (a|another) (.+)$/i.test(p)) {
-      const m = p.match(/^sacrifice (a|another) (.+)$/i)!;
+    else if (/^sacrifice (an?|another) (.+)$/i.test(p)) {
+      const m = p.match(/^sacrifice (an?|another) (.+)$/i)!;
       const o = parseNouns(m[2]);
       if (!o) return null;
       cost.sacrifice = { ...o.filter, types: o.types, other: m[1].toLowerCase() === 'another' || undefined };
@@ -1432,9 +1483,137 @@ function parseActivationCost(raw: string): Cost | null {
 
 // ---------- Triggers ----------
 
-type TrigSpec = { on: TriggerOn; spellTypes?: CardType[]; spellNotTypes?: CardType[]; condition?: TriggeredAbility['condition'] };
+type TrigSpec = { on: TriggerOn; spellTypes?: CardType[]; spellNotTypes?: CardType[]; condition?: TriggeredAbility['condition']; batched?: boolean };
+// ---------- Objects that left or are dealing damage (matched by snapshot) ----------
+
+const OUTLAWS = ['Assassin', 'Mercenary', 'Pirate', 'Rogue', 'Warlock'];
+
+/**
+ * "artifact", "Clue or Food", "nontoken creature", "artifact or enchantment", "outlaw", "token" →
+ * a test on a snapshot. Each "or" alternative must match all of its words ("artifact creature" = both).
+ */
+function snapPredicate(phrase: string): ((snap: Snapshot) => boolean) | null {
+  const alts = phrase.trim().toLowerCase().replace(/ and\/or /g, ' or ').split(/,\s*(?:or\s+)?|\s+or\s+/).filter(Boolean);
+  const tests: ((snap: Snapshot) => boolean)[][] = [];
+  for (const alt of alts) {
+    const t: ((snap: Snapshot) => boolean)[] = [];
+    for (const raw of alt.split(/\s+/)) {
+      const w = singular(raw);
+      if (w === 'permanent' || w === 'card') continue;
+      if (TYPE_WORDS[w]) t.push((sn) => sn.types.includes(TYPE_WORDS[w]));
+      else if (w.startsWith('non') && TYPE_WORDS[w.slice(3)]) t.push((sn) => !sn.types.includes(TYPE_WORDS[w.slice(3)]));
+      else if (w === 'token') t.push((sn) => sn.token);
+      else if (w === 'nontoken') t.push((sn) => !sn.token);
+      else if (w === 'outlaw') t.push((sn) => (findDef(sn.def)?.subtypes ?? []).some((x) => OUTLAWS.includes(x)));
+      else if (/^[a-z]+$/.test(w) && w.length > 2) {
+        const sub = w[0].toUpperCase() + w.slice(1);
+        t.push((sn) => (findDef(sn.def)?.subtypes ?? []).includes(sub));
+      } else return null;
+    }
+    tests.push(t);
+  }
+  if (!tests.length) return null;
+  return (sn) => tests.some((t) => t.every((f) => f(sn)));
+}
+
+/** Triggers on things leaving the battlefield, being sacrificed, or dealing combat damage together. */
+function parseZoneTrigger(c: string): TrigSpec[] | null {
+  let m: RegExpMatchArray | null;
+  if (/^when(ever)? cardname enters or is put into a graveyard from$/.test(c)) return [{ on: 'etb' }, { on: 'toGraveyardFromBattlefield' }];
+  m = c.match(/^whenever cardname (attacks or )?becomes the target of a (spell|spell or ability)( an opponent controls)?(?: for the first time each turn)?$/);
+  if (m) {
+    const spellOnly = m[2] === 'spell';
+    const opp = !!m[3];
+    const first = /first time each turn/.test(c);
+    const target: TrigSpec = {
+      on: 'becomesTarget',
+      condition: (s, e, self) => {
+        if (e.t !== 'targeted' || (spellOnly && !e.spell) || (opp && e.by === self.controller)) return false;
+        if (first) {
+          const live = s.cards[self.id];
+          if (live?.usedOnTurn?.targeted === s.turn) return false;
+          if (live) live.usedOnTurn = { ...(live.usedOnTurn ?? {}), targeted: s.turn };
+        }
+        return true;
+      },
+    };
+    return m[1] ? [{ on: 'attacks' }, target] : [target];
+  }
+  if (/^whenever you create or sacrifice a token$/.test(c)) {
+    return [
+      { on: 'anyEtb', condition: (s, e, self) => e.t === 'etb' && !!s.cards[e.card]?.token && s.cards[e.card].controller === self.controller },
+      { on: 'youSacrifice', condition: (_s, e) => e.t === 'leaves' && e.snap.token },
+    ];
+  }
+  if ((m = c.match(/^whenever (you|a player) sacrifices? (a|an|another|one or more) (.+)$/))) {
+    const pred = snapPredicate(m[3]);
+    if (!pred) return null;
+    const other = m[2] === 'another';
+    return [{
+      on: m[1] === 'you' ? 'youSacrifice' : 'anySacrifice',
+      batched: m[2] === 'one or more',
+      condition: (_s, e, self) => e.t === 'leaves' && pred(e.snap) && !(other && e.card === self.id),
+    }];
+  }
+  m = c.match(/^whenever (cardname or )?(a|an|another|one or more|one or more other) (.+?)( you control| an opponent controls)? (?:is|are) put into (a|your|an opponent's) graveyard from$/);
+  if (m) {
+    const pred = snapPredicate(m[3]);
+    if (!pred) return null;
+    const other = /another|other/.test(m[2]);
+    const yours = m[4]?.includes('you control');
+    const theirs = m[4]?.includes('opponent');
+    const ownerYou = m[5] === 'your';
+    const ownerOpp = m[5] === "an opponent's";
+    return [{
+      on: 'anyToGraveyard',
+      batched: m[2].startsWith('one or more'),
+      condition: (_s, e, self) => {
+        if (e.t !== 'leaves') return false;
+        if (m![1] && e.card === self.id) return true;
+        if (other && e.card === self.id) return false;
+        if (yours && e.snap.controller !== self.controller) return false;
+        if (theirs && e.snap.controller === self.controller) return false;
+        if (ownerYou && e.snap.owner !== self.controller) return false;
+        if (ownerOpp && e.snap.owner === self.controller) return false;
+        return pred(e.snap);
+      },
+    }];
+  }
+  if ((m = c.match(/^whenever (a|an|another|one or more) (.+?)( you control| an opponent controls)? leaves?$/))) {
+    const pred = snapPredicate(m[2]);
+    if (!pred) return null;
+    const yours = m[3]?.includes('you control');
+    const theirs = m[3]?.includes('opponent');
+    return [{
+      on: 'anyLeaves',
+      batched: m[1] === 'one or more',
+      condition: (_s, e, self) =>
+        e.t === 'leaves' && pred(e.snap) && !(m![1] === 'another' && e.card === self.id) &&
+        (!yours || e.snap.controller === self.controller) && (!theirs || e.snap.controller !== self.controller),
+    }];
+  }
+  if ((m = c.match(/^whenever one or more (.+?) you control deal combat damage to a player$/))) {
+    const pred = snapPredicate(m[1]);
+    if (!pred) return null;
+    return [{
+      on: 'creatureYouControlDealsCombatDamageToPlayer',
+      batched: true,
+      condition: (s, e) => e.t === 'combatDamagePlayer' && !!s.cards[e.source] && pred(snapshot(s, s.cards[e.source])),
+    }];
+  }
+  if ((m = c.match(/^whenever (an opponent|a player|you) casts? (?:their|your) (first|second) (noncreature )?spell each turn$/))) {
+    const n = m[2] === 'first' ? 1 : 2;
+    const nonc = !!m[3];
+    const on: TriggerOn = m[1] === 'you' ? 'youCast' : m[1] === 'a player' ? 'anyPlayerCasts' : 'opponentCasts';
+    return [{ on, spellNotTypes: nonc ? ['Creature'] : undefined, condition: (_s, e) => e.t === 'cast' && (nonc ? e.nthNoncreature : e.nth) === n }];
+  }
+  return null;
+}
+
 function parseTrigger(cond: string): TrigSpec[] | null {
   const c = cond.toLowerCase().replace(/ the battlefield/g, '');
+  const zone = parseZoneTrigger(c);
+  if (zone) return zone;
   const map: [RegExp, TriggerOn][] = [
     [/^when(ever)? cardname enters$/, 'etb'],
     [/^whenever you win a coin flip$/, 'youWinFlip'],
@@ -1463,17 +1642,20 @@ function parseTrigger(cond: string): TrigSpec[] | null {
   if (/^whenever cardname or another creature you control dies$/.test(c)) return [{ on: 'creatureYouControlDies' }];
   for (const [re, on] of map) if (re.test(c)) return [{ on }];
   // Generic "whenever a/another <thing> [you control] enters/dies".
-  const g = cond.replace(/ the battlefield/g, '').match(/^whenever (a|an|another|one or more) (.+?)( you control| an opponent controls)? (enters(?: under your control)?|dies)$/i);
+  const g = cond.replace(/ the battlefield/g, '').match(/^whenever (a|an|another|one or more|one or more other) (.+?)( you control| an opponent controls)? (enters?(?: under your control)?|dies|die)$/i);
   if (g) {
+    const batched = /one or more/i.test(g[1]);
+    if (/one or more other/i.test(g[1])) g[1] = 'another';
     const o = parseObject(singularPhrase(g[2]));
     if (!o || (o.kind !== 'creature' && o.kind !== 'permanent')) return null;
     const types: CardType[] | undefined = o.kind === 'creature' ? ['Creature'] : o.filter.types;
     const yours = /you control/i.test(g[3] ?? '') || /under your control/i.test(g[4]);
     const theirs = /opponent/i.test(g[3] ?? '');
     const other = g[1].toLowerCase() === 'another';
-    if (/^dies$/i.test(g[4])) {
+    if (/^die/i.test(g[4])) {
       return [{
         on: 'anyDies',
+        batched,
         condition: (_s, e, self) => {
           if (e.t !== 'leaves') return false;
           if (other && e.card === self.id) return false;
@@ -1488,6 +1670,7 @@ function parseTrigger(cond: string): TrigSpec[] | null {
     }
     return [{
       on: 'anyEtb',
+      batched,
       condition: (s, e, self) => {
         if (e.t !== 'etb') return false;
         const c = s.cards[e.card];
@@ -1567,6 +1750,7 @@ function spellFilter(phrase: string): CardFilter | 'any' | null {
 
 function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyword[]; dynamicPT?: CardDef['dynamicPT'] } | null {
   const l = line.replace(/\.$/, '');
+  if (/^treasures you control have "\{t\}, sacrifice (?:cardname|this artifact): add two mana of any one color\.?"$/i.test(l)) return { statics: [{ kind: 'treasureMana2' }] };
   // Variable power/toughness.
   let dm = l.match(/^cardname's (power|toughness|power and toughness) (?:is|are each) equal to (.+)$/i);
   if (dm) {
@@ -1624,6 +1808,18 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
   if (/^enchanted creature can't attack or block$/i.test(l)) return { statics: [{ kind: 'attached', cantAttackOrBlock: true }] };
   if (/^you have no maximum hand size$/i.test(l)) return { statics: [{ kind: 'noMaxHandSize' }] };
   if (/^if you would flip a coin, instead flip two coins and ignore one$/i.test(l)) return { statics: [{ kind: 'thumb' }] };
+  // Treasure engines.
+  if (/^if you would create one or more treasure tokens, instead create those tokens plus an additional treasure token$/i.test(l)) return { statics: [{ kind: 'treasureExtra' }] };
+  if (/^if you would create a clue, food, or treasure token, instead create one of each$/i.test(l)) return { statics: [{ kind: 'clueFoodTreasure' }] };
+  // Untapping on other players' turns.
+  m = l.match(/^untap (all .+? you control|cardname) during each other player's untap step$/i);
+  if (m) {
+    if (/^cardname$/i.test(m[1])) return { statics: [{ kind: 'untapOthersStep', self: true }] };
+    const o = parseObject(singularPhrase(m[1].replace(/^all /i, '')));
+    if (!o || (o.kind !== 'creature' && o.kind !== 'permanent')) return null;
+    return { statics: [{ kind: 'untapOthersStep', filter: { ...o.filter, types: o.kind === 'creature' ? ['Creature'] : o.filter.types } }] };
+  }
+  if (/^you may activate abilities of creatures you control as though those creatures had haste$/i.test(l)) return { statics: [{ kind: 'abilityHaste' }] };
   if (/^the first time you flip one or more coins each turn, those coins come up heads and you win those flips$/i.test(l)) return { statics: [{ kind: 'firstFlipWins' }] };
   // The top of your library, and playing from other zones.
   if (/^you may look at the top card of your library (?:at )?any time$/i.test(l)) return { statics: [{ kind: 'lookTop' }] };
@@ -1897,7 +2093,7 @@ export function convertScryfall(card: ScryCard): CardDef {
       withTarget(ctx, { type: type as 'card' | 'player', id } as Target, extra.i, extra.left);
     };
     for (const t of mt.trig)
-      def.triggers!.push({ on: t.on, spellTypes: t.spellTypes, spellNotTypes: t.spellNotTypes, condition: t.condition, text: mt.raw, effect: (ctx) => ask(ctx, modes.map((_, i) => i)) });
+      def.triggers!.push({ on: t.on, spellTypes: t.spellTypes, spellNotTypes: t.spellNotTypes, condition: t.condition, batched: t.batched, text: mt.raw, effect: (ctx) => ask(ctx, modes.map((_, i) => i)) });
   };
   let kickedText: string | null = null;
   const spellLines: string[] = [];
@@ -2383,6 +2579,8 @@ function handleLine(
       return false;
     }
     let body = m[2].replace(/\.$/, '');
+    const once = /\. this ability triggers only once each turn$/i.test(body);
+    if (once) body = body.replace(/\. this ability triggers only once each turn$/i, '');
     let optional = false;
     if (/^you may /i.test(body)) {
       optional = true;
@@ -2392,7 +2590,7 @@ function handleLine(
     const eff = parseEffect(body, def, key);
     if (!eff) return false;
     for (const t of trig) {
-      const ta: TriggeredAbility = { on: t.on, spellTypes: t.spellTypes, spellNotTypes: t.spellNotTypes, condition: t.condition, text: original, targets: eff.targets.length ? eff.targets : undefined, optional, effect: eff.effect };
+      const ta: TriggeredAbility = { on: t.on, spellTypes: t.spellTypes, spellNotTypes: t.spellNotTypes, condition: t.condition, batched: t.batched, onceEachTurn: once || undefined, text: original, targets: eff.targets.length ? eff.targets : undefined, optional, effect: eff.effect };
       def.triggers!.push(ta);
     }
     return true;

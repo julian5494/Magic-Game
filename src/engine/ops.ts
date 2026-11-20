@@ -75,7 +75,7 @@ export function moveCard(
   state: GameState,
   id: CardId,
   to: ZoneName,
-  opts: { tapped?: boolean; controller?: PlayerId; bottom?: boolean; silent?: boolean } = {},
+  opts: { tapped?: boolean; controller?: PlayerId; bottom?: boolean; silent?: boolean; sacrifice?: boolean } = {},
 ): void {
   const card = state.cards[id];
   if (!card) return;
@@ -89,7 +89,8 @@ export function moveCard(
       for (const a of state.combat.attackers) a.blockedBy = a.blockedBy.filter((b) => b !== id);
     }
     state.recentlyLeft.push(snap);
-    pushEvent(state, { t: 'leaves', card: id, snap, to });
+    if (to === 'graveyard' && snap.types.includes('Creature')) state.diedThisTurn = (state.diedThisTurn ?? 0) + 1;
+    pushEvent(state, { t: 'leaves', card: id, snap, to, ...(opts.sacrifice ? { sac: card.controller } : {}) });
   } else {
     const arr = zoneArray(state, card, from);
     if (arr) {
@@ -333,18 +334,39 @@ export function destroy(state: GameState, id: CardId): boolean {
   return true;
 }
 
+const ARTIFACT_TOKENS = ['Clue Token', 'Food Token', 'Treasure Token'];
+
 export function createToken(state: GameState, pid: PlayerId, defName: string, n = 1): CardInstance[] {
-  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of defOf(c).statics ?? []) if (st.kind === 'tokenDouble') n *= 2;
-  n = Math.min(n, 200);
-  const out: CardInstance[] = [];
-  for (let i = 0; i < n; i++) {
-    const card = makeCard(state, defName, pid, 'stack', true);
-    card.zone = 'stack';
-    moveCard(state, card.id, 'battlefield', { controller: pid });
-    out.push(card);
+  const statics = battlefieldCards(state).filter((c) => c.controller === pid).flatMap((c) => defOf(c).statics ?? []);
+  const has = (k: string) => statics.filter((st) => st.kind === k).length;
+  // Replacement effects, in a fixed order: Academy Manufactor, then Xorn, then doublers.
+  const batch: Record<string, number> = { [defName]: n };
+  if (has('clueFoodTreasure') && ARTIFACT_TOKENS.includes(defName)) {
+    let k = n;
+    for (let i = 0; i < has('clueFoodTreasure'); i++) k *= 3;
+    for (const t of ARTIFACT_TOKENS) batch[t] = k / 3;
   }
-  if (n > 0 && state.phase === 'playing') log(state, `${getPlayer(state, pid).name} creates ${n === 1 ? 'a' : n} ${defName}${n > 1 ? 's' : ''}.`);
+  if (batch['Treasure Token']) batch['Treasure Token'] += has('treasureExtra');
+  const doublers = has('tokenDouble');
+  const out: CardInstance[] = [];
+  for (const [name, count] of Object.entries(batch)) {
+    const total = Math.min(count * 2 ** doublers, 200);
+    for (let i = 0; i < total; i++) {
+      const card = makeCard(state, name, pid, 'stack', true);
+      card.zone = 'stack';
+      moveCard(state, card.id, 'battlefield', { controller: pid });
+      out.push(card);
+    }
+    if (total > 0 && state.phase === 'playing') log(state, `${getPlayer(state, pid).name} creates ${total === 1 ? 'a' : total} ${name}${total > 1 ? 's' : ''}.`);
+  }
+  if (out.length) getPlayer(state, pid).tokenTurn = state.turn;
   return out;
+}
+
+/** How much one activation of a mana ability makes (Goldspan Dragon makes Treasures add two). */
+export function manaMultiplier(state: GameState, card: CardInstance): number {
+  if (!(defOf(card).subtypes ?? []).includes('Treasure')) return 1;
+  return battlefieldCards(state).some((c) => c.controller === card.controller && (defOf(c).statics ?? []).some((st) => st.kind === 'treasureMana2')) ? 2 : 1;
 }
 
 export function tapPermanent(state: GameState, card: CardInstance): void {
@@ -581,7 +603,7 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
         const options = battlefieldCards(state).filter((c) => c.controller === pid && matchesFilter(state, c, filter, pid, init.source));
         if (options.length === 0) continue;
         if (options.length <= n) {
-          for (const o of options) moveCard(state, o.id, 'graveyard');
+          for (const o of options) moveCard(state, o.id, 'graveyard', { sacrifice: true });
           log(state, `${getPlayer(state, pid).name} sacrificed ${options.map((o) => o.def).join(', ')}.`);
           continue;
         }

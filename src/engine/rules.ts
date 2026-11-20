@@ -6,7 +6,7 @@ import { emptyPool } from './mana';
 import { getDef } from './registry';
 import {
   alivePlayers, apnapOrder, battlefieldCards, cantAttackOrBlock, controllerHasStatic, defOf, getKeywords, getPlayer,
-  getPT, hasKeyword, hasType, isLegendary, log, newId, nextPlayer, opponentsOf, snapshot,
+  getPT, hasKeyword, hasType, isLegendary, log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot,
 } from './state';
 import type {
   CardInstance, GameEvent, GameState, PendingTrigger, PlayerId, Snapshot, StackItem, Step, Target,
@@ -199,6 +199,21 @@ function eventMatches(
     case 'anyDies':
       ok = e.t === 'leaves' && e.to === 'graveyard' && isCreatureSnap(e.snap);
       break;
+    case 'youSacrifice':
+      ok = e.t === 'leaves' && e.sac === self.controller;
+      break;
+    case 'anySacrifice':
+      ok = e.t === 'leaves' && !!e.sac;
+      break;
+    case 'anyToGraveyard':
+      ok = e.t === 'leaves' && e.to === 'graveyard';
+      break;
+    case 'anyLeaves':
+      ok = e.t === 'leaves';
+      break;
+    case 'becomesTarget':
+      ok = e.t === 'targeted' && e.card === self.id;
+      break;
   }
   if (!ok) return false;
   if (t.condition) {
@@ -218,12 +233,19 @@ export function collectTriggers(state: GameState): void {
   const left = state.recentlyLeft;
   state.events = [];
   state.recentlyLeft = [];
+  // "Whenever one or more ..." triggers once for events that happen together.
+  const batchedDone = new Set<string>();
   for (const e of events) {
     const seen = new Set<string>();
     for (const card of battlefieldCards(state)) {
       seen.add(card.id);
       for (const { t, index } of triggersOf(state, card)) {
         if (eventMatches(state, t, e, card)) {
+          if (t.batched) {
+            const key = `${card.id}:${index}`;
+            if (batchedDone.has(key)) continue;
+            batchedDone.add(key);
+          }
           if (t.onceEachTurn) {
             if (card.usedOnTurn?.[`t${index}`] === state.turn) continue;
             card.usedOnTurn = { ...(card.usedOnTurn ?? {}), [`t${index}`]: state.turn };
@@ -244,9 +266,14 @@ export function collectTriggers(state: GameState): void {
       for (const snap of left) {
         if (seen.has(snap.id)) continue;
         for (const { t, index } of triggersOf(state, snap)) {
-          const lookBack = ['dies', 'leaves', 'toGraveyardFromBattlefield', 'creatureYouControlDies', 'otherCreatureYouControlDies', 'equippedCreatureDies', 'anyDies'];
+          const lookBack = ['dies', 'leaves', 'toGraveyardFromBattlefield', 'creatureYouControlDies', 'otherCreatureYouControlDies', 'equippedCreatureDies', 'anyDies', 'youSacrifice', 'anySacrifice', 'anyToGraveyard', 'anyLeaves'];
           if (!lookBack.includes(t.on)) continue;
           if (eventMatches(state, t, e, snap)) {
+            if (t.batched) {
+              const key = `${snap.id}:${index}`;
+              if (batchedDone.has(key)) continue;
+              batchedDone.add(key);
+            }
             state.pendingTriggers.push({ source: snap.id, def: snap.def, index, controller: snap.controller, event: e, snapshot: snap });
           }
         }
@@ -540,7 +567,10 @@ export function startTurn(state: GameState, pid: PlayerId): void {
     p.landsPlayed = 0;
     p.extraLandsThisTurn = 0;
     state.spellsThisTurn = 0;
+    state.diedThisTurn = 0;
     p.lifeGainedThisTurn = 0;
+    p.spellsCast = 0;
+    p.noncreatureCast = 0;
     if (p.passUntilTurn !== null && p.passUntilTurn < state.turn) p.passUntilTurn = null;
   }
   log(state, `— Turn ${state.turn}: ${getPlayer(state, pid).name} —`);
@@ -584,6 +614,15 @@ function enterStep(state: GameState, step: Step): void {
         if (hasKeyword(state, c, 'NoUntap')) continue;
         if (c.skipUntap > 0) c.skipUntap--;
         else c.tapped = false;
+      }
+      // "Untap ... during each other player's untap step."
+      for (const src of battlefieldCards(state)) {
+        if (src.controller === ap) continue;
+        for (const st of getDef(src.def).statics ?? []) {
+          if (st.kind !== 'untapOthersStep') continue;
+          if (st.self) src.tapped = false;
+          else for (const c of battlefieldCards(state)) if (c.controller === src.controller && matchesFilter(state, c, st.filter ?? {}, src.controller, src.id)) c.tapped = false;
+        }
       }
       return;
     case 'upkeep':

@@ -2,7 +2,7 @@ import type { ActivatedAbility, CardDef, CastVariant, StaticAbility } from './ca
 import type { ManaCost, ManaSource } from './mana';
 import { costVariants, emptyPool, parseCost, payFromPool, solvePayment } from './mana';
 import {
-  drawCards, gainLife, legalTargets, loseLife, makeCard, makeCtx, moveCard, pushEvent, queueDecision, runCardHandler,
+  drawCards, gainLife, legalTargets, loseLife, makeCard, makeCtx, manaMultiplier, moveCard, pushEvent, queueDecision, runCardHandler,
   sameTarget, shuffle, tapPermanent,
 } from './ops';
 import { getDef } from './registry';
@@ -11,7 +11,7 @@ import {
   processTriggers, putTriggerOnStack, resolveTop, startTurn,
 } from './rules';
 import {
-  alivePlayers, battlefieldCards, commanderIdentity, defColors, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
+  alivePlayers, battlefieldCards, commanderIdentity, controllerHasStatic, defColors, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
   log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot, staticsOf,
 } from './state';
 import type {
@@ -49,7 +49,7 @@ function markUsed(state: GameState, c: CardInstance, ab: ActivatedAbility, index
 
 function canUseTap(state: GameState, c: CardInstance): boolean {
   if (c.tapped) return false;
-  if (hasType(c, 'Creature') && c.sick && !hasKeyword(state, c, 'Haste')) return false;
+  if (hasType(c, 'Creature') && c.sick && !hasKeyword(state, c, 'Haste') && !controllerHasStatic(state, c.controller, 'abilityHaste')) return false;
   return true;
 }
 
@@ -80,11 +80,12 @@ function activateManaAbility(state: GameState, pid: PlayerId, c: CardInstance, i
   const colors = abilityColors(state, pid, ab);
   const sym = color && colors.includes(color) ? color : colors[0];
   markUsed(state, c, ab, index);
+  const mult = manaMultiplier(state, c);
   if (ab.cost.tap) tapPermanent(state, c);
-  if (ab.cost.sacrificeSelf) moveCard(state, c.id, 'graveyard');
+  if (ab.cost.sacrificeSelf) moveCard(state, c.id, 'graveyard', { sacrifice: true });
   const pool = getPlayer(state, pid).manaPool;
   if (ab.mana!.fixed) for (const s of ab.mana!.fixed) pool[s]++;
-  else pool[sym] += ab.mana!.count ? ab.mana!.count(state, pid) : ab.mana!.amount ?? 1;
+  else pool[sym] += mult * (ab.mana!.count ? ab.mana!.count(state, pid) : ab.mana!.amount ?? 1);
   if (ab.mana!.pain) loseLife(state, pid, ab.mana!.pain);
   if (ab.cost.life) loseLife(state, pid, ab.cost.life);
 }
@@ -540,7 +541,7 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
         moveCard(state, sc.id, 'graveyard');
       } else {
         sacrificed = snapshot(state, sc);
-        moveCard(state, sc.id, 'graveyard');
+        moveCard(state, sc.id, 'graveyard', { sacrifice: true });
       }
     }
     if (fromCommand) p.commanderCasts[card.id] = (p.commanderCasts[card.id] ?? 0) + 1;
@@ -560,7 +561,9 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
       variant: a.variant,
     });
     log(state, `${p.name} casts ${def.name}${a.modes ? ` (${a.label.replace(/^Cast [^:]+: /, '')})` : ''}${x ? ` (X=${x})` : ''}${describeTargets(state, targets)}.`);
-    pushEvent(state, { t: 'cast', card: card.id, controller: pid, def: def.name });
+    p.spellsCast = (p.spellsCast ?? 0) + 1;
+    if (!def.types.includes('Creature')) p.noncreatureCast = (p.noncreatureCast ?? 0) + 1;
+    pushEvent(state, { t: 'cast', card: card.id, controller: pid, def: def.name, nth: p.spellsCast, nthNoncreature: def.types.includes('Creature') ? undefined : p.noncreatureCast });
     const before = state.spellsThisTurn ?? 0;
     state.spellsThisTurn = before + 1;
     const top = state.stack[state.stack.length - 1];
@@ -603,24 +606,25 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     }
     const inc = card.inc;
     const sourceSnap = snapshot(state, card);
+    const mult = manaMultiplier(state, card);
     if (ab.cost.mana) pay(state, pid, parseCost(ab.cost.mana), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
     if (ab.cost.tap) tapPermanent(state, card);
     if (ab.cost.life) loseLife(state, pid, ab.cost.life);
     if (ab.cost.sacrifice) {
       const sc = state.cards[action.sacrifice!];
       sacrificed = snapshot(state, sc);
-      moveCard(state, sc.id, 'graveyard');
+      moveCard(state, sc.id, 'graveyard', { sacrifice: true });
     }
     if (ab.cost.sacrificeSelf) {
       sacrificed = sacrificed ?? sourceSnap;
-      moveCard(state, card.id, 'graveyard');
+      moveCard(state, card.id, 'graveyard', { sacrifice: true });
     }
     if (ab.mana) {
       // Mana abilities don't use the stack.
       const colors = abilityColors(state, pid, ab);
       const sym = action.color && colors.includes(action.color) ? action.color : colors[0];
       if (ab.mana.fixed) for (const s of ab.mana.fixed) p.manaPool[s]++;
-      else p.manaPool[sym] += ab.mana.count ? ab.mana.count(state, pid) : ab.mana.amount ?? 1;
+      else p.manaPool[sym] += mult * (ab.mana.count ? ab.mana.count(state, pid) : ab.mana.amount ?? 1);
       if (ab.mana.pain) loseLife(state, pid, ab.mana.pain);
       return;
     }
@@ -652,6 +656,7 @@ export function checkWard(state: GameState, pid: PlayerId, item: StackItem | und
   for (const t of item.targets) {
     if (!t || t.type !== 'card') continue;
     const c = state.cards[t.id];
+    if (c?.zone === 'battlefield') pushEvent(state, { t: 'targeted', card: c.id, by: pid, spell: item.kind === 'spell' });
     const ward = c && c.zone === 'battlefield' && c.controller !== pid ? defOf(c).ward : undefined;
     if (!ward) continue;
     queueDecision(state, {
@@ -857,7 +862,7 @@ const HANDLERS: Record<string, Handler> = {
     finishCleanup(state);
   },
   'core:sacrifice': (state, d, a) => {
-    for (const id of a.cards!) if (state.cards[id]?.zone === 'battlefield') moveCard(state, id, 'graveyard');
+    for (const id of a.cards!) if (state.cards[id]?.zone === 'battlefield') moveCard(state, id, 'graveyard', { sacrifice: true });
     log(state, `${getPlayer(state, d.player).name} sacrifices ${a.cards!.map((id) => state.cards[id]?.def ?? 'a token').join(', ')}.`);
   },
   'core:orderTrigger': (state, d, a) => {
@@ -1064,7 +1069,7 @@ export function run(state: GameState): void {
     for (const c of battlefieldCards(state).filter((x) => x.evoked)) {
       c.evoked = false;
       log(state, `${c.def} is sacrificed (evoke).`);
-      moveCard(state, c.id, 'graveyard');
+      moveCard(state, c.id, 'graveyard', { sacrifice: true });
     }
     if (state.decisions.length) return;
     if (state.phase === 'mulligan') {
