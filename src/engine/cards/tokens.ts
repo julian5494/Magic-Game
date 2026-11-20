@@ -30,6 +30,8 @@ export const TOKENS: CardDef[] = [
   { ...token('Deathtouch Wurm Token', [], ['Phyrexian', 'Wurm'], 3, 3, { keywords: ['Deathtouch'], text: 'Deathtouch' }), types: ['Artifact', 'Creature'] },
   { ...token('Lifelink Wurm Token', [], ['Phyrexian', 'Wurm'], 3, 3, { keywords: ['Lifelink'], text: 'Lifelink' }), types: ['Artifact', 'Creature'] },
   token('Zombie Token', ['B'], ['Zombie'], 2, 2),
+  token('Phyrexian Germ Token', ['B'], ['Phyrexian', 'Germ'], 0, 0),
+  token('Rebel Token', ['R'], ['Rebel'], 2, 2),
   token('Insect Token', ['B', 'G'], ['Insect'], 1, 1),
   token('Faerie Rogue Token', ['B'], ['Faerie', 'Rogue'], 1, 1, { keywords: ['Flying'], text: 'Flying' }),
   {

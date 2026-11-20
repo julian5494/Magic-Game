@@ -110,27 +110,31 @@ function staticMods(state: GameState, card: CardInstance) {
   let power = 0;
   let toughness = 0;
   const keywords: Keyword[] = [];
+  const lost: Keyword[] = [];
   let cantAttackOrBlock = false;
-  if (card.zone !== 'battlefield') return { power, toughness, keywords, cantAttackOrBlock };
+  if (card.zone !== 'battlefield') return { power, toughness, keywords, lost, cantAttackOrBlock };
   for (const src of battlefieldCards(state)) {
     const def = defOf(src);
     if (!def.statics) continue;
     for (const st of def.statics) {
       if (st.kind === 'anthem') {
         if (matchesFilter(state, card, st.filter, src.controller, src.id)) {
-          power += st.power;
-          toughness += st.toughness;
+          const k = st.scale ? st.scale(state, src, card) : 1;
+          power += st.power * k;
+          toughness += st.toughness * k;
           if (st.keywords) keywords.push(...st.keywords);
         }
-      } else if (st.kind === 'attached' && src.attachedTo === card.id) {
-        power += st.power ?? 0;
-        toughness += st.toughness ?? 0;
+      } else if (st.kind === 'attached' && src.attachedTo === card.id && (!st.condition || st.condition(state, card))) {
+        const k = st.scale ? st.scale(state, src, card) : 1;
+        power += (st.power ?? 0) * k;
+        toughness += (st.toughness ?? 0) * k;
         if (st.keywords) keywords.push(...st.keywords);
+        if (st.loseKeywords) lost.push(...st.loseKeywords);
         if (st.cantAttackOrBlock) cantAttackOrBlock = true;
       }
     }
   }
-  return { power, toughness, keywords, cantAttackOrBlock };
+  return { power, toughness, keywords, lost, cantAttackOrBlock };
 }
 
 export function getPT(state: GameState, card: CardInstance): { power: number; toughness: number } {
@@ -152,7 +156,9 @@ export function getPT(state: GameState, card: CardInstance): { power: number; to
 
 export function getKeywords(state: GameState, card: CardInstance): Keyword[] {
   const def = defOf(card);
-  const set = new Set<Keyword>([...(def.keywords ?? []), ...card.temp.keywords, ...staticMods(state, card).keywords]);
+  const mods = staticMods(state, card);
+  const set = new Set<Keyword>([...(def.keywords ?? []), ...card.temp.keywords, ...mods.keywords]);
+  for (const k of mods.lost) set.delete(k);
   if (card.dashed) set.add('Haste');
   return [...set];
 }

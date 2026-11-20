@@ -1,4 +1,20 @@
-import type { CardDef } from './cardtypes';
+import type { ActivatedAbility, CardDef, CardFilter } from './cardtypes';
+
+/** "Equip {2}", "Equip legendary creature {3}": attach to target creature you control (matching `filter`). */
+export function equipAbility(cost: string, filter: CardFilter = {}, label = ''): ActivatedAbility {
+  return {
+    text: `Equip ${label ? `${label} ` : ''}${cost}`,
+    cost: { mana: cost },
+    equip: true,
+    sorcerySpeed: true,
+    targets: [{ kind: 'creature', filter: { ...filter, controller: 'you' }, label: 'creature to equip', bias: 'self' }],
+    effect: (ctx) => {
+      const t = ctx.card(0);
+      if (t && ctx.self) ctx.self.attachedTo = t.id;
+    },
+    aiValue: 2,
+  };
+}
 
 const DB = new Map<string, CardDef>();
 
@@ -11,20 +27,7 @@ export function registerCards(defs: CardDef[]): void {
   for (const d of defs) {
     if (DB.has(d.name)) throw new Error(`Duplicate card definition: ${d.name}`);
     const def: CardDef = { ...d, abilities: [...(d.abilities ?? [])] };
-    if (def.equip !== undefined) {
-      def.abilities!.push({
-        text: `Equip ${def.equip}`,
-        cost: { mana: def.equip },
-        equip: true,
-        sorcerySpeed: true,
-        targets: [{ kind: 'creature', filter: { controller: 'you' }, label: 'creature to equip', bias: 'self' }],
-        effect: (ctx) => {
-          const t = ctx.card(0);
-          if (t && ctx.self) ctx.self.attachedTo = t.id;
-        },
-        aiValue: 2,
-      });
-    }
+    if (def.equip !== undefined) def.abilities!.push(equipAbility(def.equip));
     DB.set(def.name, def);
     byLower.set(normalize(def.name), def);
   }

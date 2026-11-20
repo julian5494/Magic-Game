@@ -149,6 +149,8 @@ export interface Player {
   /** Spells this player cast this turn (all, and noncreature). */
   spellsCast?: number;
   noncreatureCast?: number;
+  /** Turn this player last activated an equip ability (Bruenor: the first each turn is free). */
+  equipTurn?: number;
   /** Turn this player last created a token. */
   tokenTurn?: number;
   /** Extra land drops granted this turn ("You may play an additional land this turn"). */
@@ -327,6 +329,10 @@ export interface GameState {
   startingLife: number;
   /** Spells cast this turn (for storm). */
   spellsThisTurn?: number;
+  /** Additional combat phases queued: after the current main phase, or right after the current combat. */
+  extraCombats?: { afterMain: number; afterCombat: number };
+  /** Combat phases begun this turn ("if it's the first combat phase of the turn"). */
+  combatsThisTurn?: number;
   /** Creatures that died this turn (Mahadi). */
   diedThisTurn?: number;
   /** Spells cast during the previous turn (werewolves). */

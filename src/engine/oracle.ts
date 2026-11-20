@@ -9,9 +9,9 @@ import type {
 } from './cardtypes';
 import { parseCost } from './mana';
 import { parseCount, parseExpr } from './oracle-amounts';
-import { findDef, getDef, registerCards } from './registry';
+import { equipAbility, findDef, getDef, registerCards } from './registry';
 import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf, snapshot } from './state';
-import type { CardType, Color, GameState, Keyword, ManaSym, PlayerId, Snapshot, Supertype, Target } from './types';
+import type { CardInstance, CardType, Color, GameState, Keyword, ManaSym, PlayerId, Snapshot, Supertype, Target } from './types';
 import { legalTargets, makeCtx } from './ops';
 
 export interface ScryFace {
@@ -185,6 +185,11 @@ const SUBTYPE_TYPE: Record<string, CardType> = Object.fromEntries([
 function parseNouns(phrase: string): { types?: CardType[]; filter: CardFilter } | null {
   let p = phrase.trim().replace(/ and\/or /g, ' or ');
   const filter: CardFilter = {};
+  const pw = p.match(/ with power (\d+) or greater$/i);
+  if (pw) {
+    filter.minPower = +pw[1];
+    p = p.slice(0, pw.index);
+  }
   if (/^attacking or blocking /i.test(p)) {
     filter.attackingOrBlocking = true;
     p = p.replace(/^attacking or blocking /i, '');
@@ -558,6 +563,69 @@ const SENTENCES: SentenceParser[] = [
     if (!m) return null;
     const bottom = m[2].toLowerCase() === 'bottom';
     return action(m[1], 'opponent', (ctx, id) => ctx.moveCard(id, 'library', { bottom }));
+  },
+  // Additional combat phases.
+  (s) => {
+    const a = /^after this main phase, there is an additional combat phase(?: followed by an additional main phase)?$/i.test(s);
+    const b = /^(?:after this phase, there is an additional combat phase|there is an additional combat phase after this phase)$/i.test(s);
+    if (!a && !b) return null;
+    return {
+      targets: [],
+      run: (ctx) => {
+        const ec = (ctx.state.extraCombats ??= { afterMain: 0, afterCombat: 0 });
+        const inCombat = ['beginCombat', 'declareAttackers', 'declareBlockers', 'firstStrikeDamage', 'combatDamage', 'endCombat'].includes(ctx.state.step);
+        if (b && inCombat) ec.afterCombat++;
+        else ec.afterMain++;
+        ctx.log('There is an additional combat phase this turn.');
+      },
+    };
+  },
+  // Attaching Equipment: "attach it to target creature you control", "attach up to one target Equipment you control to it".
+  (s) => {
+    const m = s.match(/^attach (it|cardname|that equipment) to (target creature you control|up to one target creature you control|it|cardname)$/i);
+    if (!m) return null;
+    const toTarget = /target/i.test(m[2]);
+    const t: TargetSpec[] = toTarget ? [{ kind: 'creature', filter: { controller: 'you' }, label: 'creature to attach to', bias: 'self', optional: /up to one/i.test(m[2]) || undefined }] : [];
+    return {
+      targets: t,
+      run: (ctx, base, sc) => {
+        const eq = /cardname/i.test(m[1]) ? ctx.self : ctx.state.cards[sc.lastId ?? (ctx.event?.t === 'etb' ? ctx.event.card : '')];
+        const to = toTarget ? ctx.card(base) : ctx.self;
+        if (eq && to && eq.zone === 'battlefield' && to.zone === 'battlefield' && eq.controller === ctx.controller && eq.id !== to.id) eq.attachedTo = to.id;
+      },
+    };
+  },
+  (s) => {
+    const m = s.match(/^attach (?:up to one )?target (equipment|aura or equipment) you control to (it|cardname)$/i);
+    if (!m) return null;
+    const subs = /aura/i.test(m[1]) ? ['Aura', 'Equipment'] : ['Equipment'];
+    return {
+      targets: [{ kind: 'permanent', filter: { controller: 'you', custom: (_s, c) => (getDef(c.def).subtypes ?? []).some((x) => subs.includes(x)) }, label: 'Equipment to attach', bias: 'self', optional: /up to one/i.test(s) || undefined }],
+      run: (ctx, base) => {
+        const eq = ctx.card(base);
+        if (eq && ctx.self && ctx.self.zone === 'battlefield') eq.attachedTo = ctx.self.id;
+      },
+    };
+  },
+  // "Put an Equipment card from your hand onto the battlefield" (Stoneforge Mystic, Elvish Piper).
+  (s) => {
+    const m = s.match(/^put (?:a|an) (.+?) card from your hand onto the battlefield( tapped)?$/i);
+    if (!m) return null;
+    const o = parseNouns(m[1]);
+    if (!o) return null;
+    const k = hkey();
+    return {
+      targets: [],
+      run: (ctx) => {
+        const opts = getPlayer(ctx.state, ctx.controller).hand.filter((id) => matchesFilter(ctx.state, ctx.state.cards[id], { ...o.filter, types: o.types }, ctx.controller, ctx.source));
+        if (opts.length) ctx.chooseCards(ctx.controller, `Put ${/^[aeiou]/i.test(m[1]) ? 'an' : 'a'} ${m[1]} card onto the battlefield`, opts, 0, 1, k);
+      },
+      handlers: {
+        [k]: (ctx, a) => {
+          for (const id of a.cards ?? []) if (ctx.state.cards[id]?.zone === 'hand') ctx.moveCard(id, 'battlefield', { controller: ctx.controller, tapped: !!m[2] });
+        },
+      },
+    };
   },
   // Graveyard recursion
   (s) => {
@@ -1240,6 +1308,8 @@ function parseSentence(raw: string): Piece[] | null {
     .trim()
     .replace(/\.$/, '')
     .replace(/^you create /i, 'create ')
+    .replace(/^then (?=if )/i, '')
+    .replace(/^you may (put (?:a|an) .+? card from your hand onto the battlefield)/i, '$1')
     .replace(/^it deals /i, 'cardname deals ')
     .replace(/^for each (.+?), (.+)$/i, '$2 for each $1');
   if (!s) return [];
@@ -1247,6 +1317,11 @@ function parseSentence(raw: string): Piece[] | null {
   for (const p of SENTENCES) {
     const r = p(s);
     if (r) return [r];
+  }
+  const pc = s.match(/^if cardname has power (\d+) or greater, (.+)$/i);
+  if (pc) {
+    const inner = parseSentence(pc[2]);
+    if (inner) return inner.map((p) => ({ ...p, run: (ctx, base, sc) => (ctx.self && ctx.power(ctx.self) >= +pc[1] ? p.run(ctx, base, sc) : undefined) }));
   }
   const cond = s.match(/^if (.+?), (.+)$/i);
   if (cond) {
@@ -1388,6 +1463,8 @@ function note(map: Map<string, number>, s: string) {
 }
 
 function parseEffect(text: string, def: CardDef, key: string, offset = 0): { targets: TargetSpec[]; effect: (ctx: Ctx) => void } | null {
+  const fc = text.match(/^if it's the first combat phase of (?:the|your) turn, (.+?)\. after this phase, there is an additional combat phase\.?$/i);
+  if (fc) return parseEffect(`If it's the first combat phase of the turn, ${fc[1]} and there is an additional combat phase after this phase.`, def, key, offset);
   const flip = parseFlip(text, def, key, offset);
   if (flip !== undefined) return flip;
   const sentences = normalizeMulti(text).trim().replace(/\.$/, '').split(/\.\s+/);
@@ -1592,13 +1669,18 @@ function parseZoneTrigger(c: string): TrigSpec[] | null {
         (!yours || e.snap.controller === self.controller) && (!theirs || e.snap.controller !== self.controller),
     }];
   }
-  if ((m = c.match(/^whenever one or more (.+?) you control deal combat damage to a player$/))) {
+  if ((m = c.match(/^whenever one or more (.+?) you control(?: with power (\d+) or greater)? deal combat damage to a player$/))) {
     const pred = snapPredicate(m[1]);
     if (!pred) return null;
+    const minPower = m[2] ? +m[2] : 0;
     return [{
       on: 'creatureYouControlDealsCombatDamageToPlayer',
       batched: true,
-      condition: (s, e) => e.t === 'combatDamagePlayer' && !!s.cards[e.source] && pred(snapshot(s, s.cards[e.source])),
+      condition: (s, e) => {
+        if (e.t !== 'combatDamagePlayer' || !s.cards[e.source]) return false;
+        const sn = snapshot(s, s.cards[e.source]);
+        return pred(sn) && sn.power >= minPower;
+      },
     }];
   }
   if ((m = c.match(/^whenever (an opponent|a player|you) casts? (?:their|your) (first|second) (noncreature )?spell each turn$/))) {
@@ -1693,6 +1775,14 @@ function parseTrigger(cond: string): TrigSpec[] | null {
     if (w === 'enchantment') return [{ on: 'youCast', spellTypes: ['Enchantment'] }];
   }
   if (/^whenever you cast a spell$/.test(c)) return [{ on: 'youCast' }];
+  const subCast = c.match(/^whenever you cast (?:an?) ((?:aura|equipment|vehicle|saga|class)(?:,? (?:or )?(?:aura|equipment|vehicle|saga|class))*) spell$/);
+  if (subCast) {
+    const subs = subCast[1].split(/,? (?:or )?/).map((w) => w[0].toUpperCase() + w.slice(1)).filter(Boolean);
+    return [{ on: 'youCast', condition: (_s, e) => e.t === 'cast' && (getDef(e.def).subtypes ?? []).some((x) => subs.includes(x)) }];
+  }
+  if (/^whenever you attack (?:a player )?with one or more equipped creatures$/.test(c)) {
+    return [{ on: 'youAttack', condition: (s) => !!s.combat?.attackers.some((a) => battlefieldCards(s).some((x) => x.attachedTo === a.id && (getDef(x.def).subtypes ?? []).includes('Equipment'))) }];
+  }
   const simple: [RegExp, TriggerOn][] = [
     [/^at the beginning of each (?:player's )?upkeep$/, 'eachUpkeep'],
     [/^at the beginning of (?:each|the) end step$/, 'eachEndStep'],
@@ -1740,6 +1830,11 @@ function spellFilter(phrase: string): CardFilter | 'any' | null {
   if (p === 'artifact spells and colorless spells' || p === 'colorless spells and artifact spells')
     return { custom: (_s, c) => getDef(c.def).types.includes('Artifact') || defColors(getDef(c.def)).length === 0 };
   if (p === 'aura and equipment spells') return { custom: (_s, c) => ['Aura', 'Equipment'].some((t) => (getDef(c.def).subtypes ?? []).includes(t)) };
+  const sm = p.match(/^((?:aura|equipment|vehicle|saga)(?:,? (?:and |or )?(?:aura|equipment|vehicle|saga))*) spells$/);
+  if (sm) {
+    const subs = sm[1].split(/,? (?:and |or )?/).map((w) => w[0].toUpperCase() + w.slice(1));
+    return { custom: (_s, c) => subs.some((t) => (getDef(c.def).subtypes ?? []).includes(t)) };
+  }
   const TYPES: Record<string, CardType> = { creature: 'Creature', artifact: 'Artifact', enchantment: 'Enchantment', instant: 'Instant', sorcery: 'Sorcery', planeswalker: 'Planeswalker' };
   const m = p.match(/^(\w+)(?: and (\w+))? spells$/);
   if (!m) return null;
@@ -1748,8 +1843,20 @@ function spellFilter(phrase: string): CardFilter | 'any' | null {
   return { types };
 }
 
+/** "land you control", "Aura and Equipment attached to it", "color among permanents you control" → a count for scaled bonuses. */
+function attachedCount(phrase: string): ((state: GameState, src: CardInstance, card: CardInstance) => number) | null {
+  const at = phrase.match(/^(aura|equipment|aura and equipment|aura and\/or equipment) attached to it$/i);
+  if (at) {
+    const subs = /aura/i.test(at[1]) && /equipment/i.test(at[1]) ? ['Aura', 'Equipment'] : [/aura/i.test(at[1]) ? 'Aura' : 'Equipment'];
+    return (state, _src, card) => battlefieldCards(state).filter((c) => c.attachedTo === card.id && (getDef(c.def).subtypes ?? []).some((x) => subs.includes(x))).length;
+  }
+  const e = parseCount(phrase);
+  return e ? (state, src) => e(state, src.controller, src.id) : null;
+}
+
 function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyword[]; dynamicPT?: CardDef['dynamicPT'] } | null {
   const l = line.replace(/\.$/, '');
+  if (/^(?:metalcraft — )?equipment you control have equip \{0\} as long as you control three or more artifacts$/i.test(l)) return { statics: [{ kind: 'equipCost', set: 0, when: 'metalcraft' }] };
   if (/^treasures you control have "\{t\}, sacrifice (?:cardname|this artifact): add two mana of any one color\.?"$/i.test(l)) return { statics: [{ kind: 'treasureMana2' }] };
   // Variable power/toughness.
   let dm = l.match(/^cardname's (power|toughness|power and toughness) (?:is|are each) equal to (.+)$/i);
@@ -1793,6 +1900,36 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
     const types: CardType[] = o.kind === 'creature' ? ['Creature'] : o.filter.types ?? ['Creature'];
     return { statics: [{ kind: 'anthem', filter: { ...o.filter, types, controller: 'you', other: m[1] ? true : undefined }, power: 0, toughness: 0, keywords: kws }] };
   }
+  m = l.match(/^(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+) for each (.+)$/i);
+  if (m) {
+    const scale = attachedCount(m[3]);
+    if (!scale) return null;
+    return { statics: [{ kind: 'attached', power: +m[1], toughness: +m[2], scale }] };
+  }
+  m = l.match(/^each creature you control gets ([+-]\d+)\/([+-]\d+) for each (.+? attached to it)$/i);
+  if (m) {
+    const scale = attachedCount(m[3]);
+    if (!scale) return null;
+    return { statics: [{ kind: 'anthem', filter: { types: ['Creature'], controller: 'you' }, power: +m[1], toughness: +m[2], scale }] };
+  }
+  m = l.match(/^(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+) and loses (.+)$/i);
+  if (m) {
+    const kws = parseKeywordList(m[3]);
+    if (!kws) return null;
+    return { statics: [{ kind: 'attached', power: +m[1], toughness: +m[2], loseKeywords: kws }] };
+  }
+  m = l.match(/^as long as (?:equipped|enchanted) creature is legendary, it has (.+)$/i);
+  if (m) {
+    const kws = parseKeywordList(m[1]);
+    if (!kws) return null;
+    return { statics: [{ kind: 'attached', keywords: kws, condition: (_s, c) => (findDef(c.def)?.supertypes ?? []).includes('Legendary') }] };
+  }
+  // Equip costs.
+  if (/^you may pay \{0\} rather than pay the equip cost of the first equip ability you activate each turn$/i.test(l)) return { statics: [{ kind: 'equipCost', set: 0, when: 'firstEachTurn' }] };
+  m = l.match(/^equip abilities you activate cost \{(\d+)\} less to activate$/i);
+  if (m) return { statics: [{ kind: 'equipCost', reduce: +m[1] }] };
+  if (/^your opponents can't cast spells during your turn$/i.test(l)) return { statics: [{ kind: 'oppsNoCastYourTurn' }] };
+  if (/^as long as cardname is attached to a creature, your opponents can't cast spells during your turn$/i.test(l)) return { statics: [{ kind: 'oppsNoCastYourTurn', whileAttached: true }] };
   m = l.match(/^(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)(?: and has (.+))?$/i);
   if (m) {
     const kws = m[3] ? parseKeywordList(m[3]) : [];
@@ -1861,6 +1998,7 @@ function parseIfCondition(text: string): ((state: GameState, pid: PlayerId) => b
     if (typeof n !== 'number') return null;
     return (s, pid) => (m![2].toLowerCase() === 'more' ? getPlayer(s, pid).life >= n : getPlayer(s, pid).life <= n);
   }
+  if (/^it's the first combat phase of (?:the|your) turn$/i.test(t)) return (s) => (s.combatsThisTurn ?? 0) <= 1;
   return parseControlCondition(t);
 }
 
@@ -1900,6 +2038,12 @@ function parseEntersTapped(line: string, def: CardDef): boolean {
   }
   if (/^as cardname enters, you may pay 2 life\. if you don't, it enters tapped$/i.test(l)) {
     def.shockLand = true;
+    return true;
+  }
+  const ut = l.match(/^cardname enters tapped unless (you control .+)$/i);
+  const utc = ut && parseControlCondition(ut[1]);
+  if (utc) {
+    def.entersTappedIf = (state: GameState, pid: PlayerId) => !utc(state, pid);
     return true;
   }
   let m = l.match(/^cardname enters tapped unless you have two or more opponents$/i);
@@ -2341,6 +2485,47 @@ function handleLine(
     });
     return true;
   }
+  if (/^for mirrodin!$/i.test(l)) {
+    def.triggers!.push({
+      on: 'etb',
+      text: 'For Mirrodin!: create a 2/2 red Rebel creature token, then attach this to it.',
+      effect: (ctx) => {
+        const [rebel] = ctx.createToken(ctx.controller, 'Rebel Token');
+        if (rebel && ctx.self) ctx.self.attachedTo = rebel.id;
+      },
+    });
+    return true;
+  }
+  if (/^melee$/i.test(l)) {
+    def.triggers!.push({
+      on: 'attacks',
+      text: 'Melee: +1/+1 until end of turn for each opponent you attacked this combat.',
+      effect: (ctx) => {
+        if (!ctx.self) return;
+        const n = new Set((ctx.state.combat?.attackers ?? []).filter((a) => ctx.state.cards[a.id]?.controller === ctx.controller).map((a) => a.defender)).size;
+        if (n) ctx.pump(ctx.self, n, n);
+      },
+    });
+    return true;
+  }
+  if (/^living weapon$/i.test(l)) {
+    def.triggers!.push({
+      on: 'etb',
+      text: 'Living weapon: create a 0/0 black Phyrexian Germ creature token, then attach this to it.',
+      effect: (ctx) => {
+        const [germ] = ctx.createToken(ctx.controller, 'Phyrexian Germ Token');
+        if (germ && ctx.self) ctx.self.attachedTo = germ.id;
+      },
+    });
+    return true;
+  }
+  km = l.match(/^equip (legendary creature|commander|.+? creature) ((?:\{[0-9WUBRGC]+\})+)$/i);
+  if (km) {
+    const what = km[1].toLowerCase();
+    const filter: CardFilter = what === 'legendary creature' ? { supertypes: ['Legendary'] } : what === 'commander' ? { custom: (_s, c) => c.commander } : (parseNouns(what)?.filter ?? { custom: () => false });
+    def.abilities!.push(equipAbility(km[2].toUpperCase(), filter, km[1]));
+    return true;
+  }
   if (/^persist$/i.test(l)) {
     def.triggers!.push({
       on: 'dies',
@@ -2496,7 +2681,7 @@ function handleLine(
     return true;
   }
   if (/can be your commander/i.test(l)) return true;
-  let m = l.match(/^equip (\{[0-9WUBRGC]+\})$/i);
+  let m = l.match(/^equip ((?:\{[0-9WUBRGC]+\})+)$/i);
   if (m) {
     def.equip = m[1].toUpperCase();
     return true;
@@ -2572,6 +2757,15 @@ function handleLine(
 
   // Triggered abilities.
   m = line.match(/^((?:when|whenever|at) [^,]+), (.+)$/i);
+  // A trigger condition can itself contain commas ("an Aura, Equipment, or Vehicle spell").
+  if (m && !parseTrigger(m[1])) {
+    for (let i = line.indexOf(', ', m[1].length + 1); i > 0; i = line.indexOf(', ', i + 1)) {
+      if (parseTrigger(line.slice(0, i))) {
+        m = [line, line.slice(0, i), line.slice(i + 2)] as unknown as RegExpMatchArray;
+        break;
+      }
+    }
+  }
   if (m) {
     const trig = parseTrigger(m[1]);
     if (!trig) {

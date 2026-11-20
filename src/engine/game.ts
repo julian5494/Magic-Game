@@ -47,6 +47,24 @@ function markUsed(state: GameState, c: CardInstance, ab: ActivatedAbility, index
   if (ab.onceEachTurn) c.usedOnTurn = { ...(c.usedOnTurn ?? {}), [`a${index}`]: state.turn };
 }
 
+/** An ability's mana cost after equip-cost changes (Puresteel Paladin, Bruenor, "equip abilities cost {2} less"). */
+export function abilityMana(state: GameState, pid: PlayerId, ab: ActivatedAbility): string | undefined {
+  const cost = ab.cost.mana;
+  if (!cost || !ab.equip) return cost;
+  let generic = Number(cost.match(/^\{(\d+)\}/)?.[1] ?? 0);
+  const colored = cost.replace(/^\{\d+\}/, '');
+  const p = getPlayer(state, pid);
+  for (const st of staticsOf(state, pid)) {
+    if (st.kind !== 'equipCost') continue;
+    if (st.when === 'metalcraft' && battlefieldCards(state).filter((c) => c.controller === pid && hasType(c, 'Artifact')).length < 3) continue;
+    if (st.when === 'firstEachTurn' && p.equipTurn === state.turn) continue;
+    if (st.set !== undefined) return st.set ? `{${st.set}}` : undefined;
+    if (st.reduce) generic = Math.max(0, generic - st.reduce);
+  }
+  const out = (generic ? `{${generic}}` : '') + colored;
+  return out || undefined;
+}
+
 function canUseTap(state: GameState, c: CardInstance): boolean {
   if (c.tapped) return false;
   if (hasType(c, 'Creature') && c.sick && !hasKeyword(state, c, 'Haste') && !controllerHasStatic(state, c.controller, 'abilityHaste')) return false;
@@ -272,7 +290,13 @@ function allLegalActions(state: GameState, pid: PlayerId): PlayableAction[] {
   }
 
   const flash = statics.filter((st): st is Extract<StaticAbility, { kind: 'flash' }> => st.kind === 'flash');
-  for (const id of [...p.hand, ...p.command, ...p.graveyard, ...impulse, ...topSpells]) {
+  // "Your opponents can't cast spells during your turn."
+  const silenced =
+    state.activePlayer !== pid &&
+    battlefieldCards(state).some(
+      (c) => c.controller === state.activePlayer && (defOf(c).statics ?? []).some((st) => st.kind === 'oppsNoCastYourTurn' && (!st.whileAttached || !!c.attachedTo)),
+    );
+  for (const id of silenced ? [] : [...p.hand, ...p.command, ...p.graveyard, ...impulse, ...topSpells]) {
     const card = state.cards[id];
     const def = defOf(card);
     if (def.types.includes('Land') || def.cannotCast) continue;
@@ -358,7 +382,8 @@ function allLegalActions(state: GameState, pid: PlayerId): PlayableAction[] {
     const def = defOf(state.cards[id]);
     def.handAbilities?.forEach((ab, i) => {
       if (ab.sorcerySpeed && !sorcery) return;
-      if (ab.cost.mana && !canPay(state, pid, parseCost(ab.cost.mana), [])) return;
+      const cm = abilityMana(state, pid, ab);
+      if (cm && !canPay(state, pid, parseCost(cm), [])) return;
       const targets = specViews(state, ab.targets, pid, id);
       if (!targets) return;
       out.push({ type: 'activate', cardId: id, ability: HAND_ABILITY + i, label: ab.text, targets });
@@ -422,7 +447,8 @@ function abilityAction(
     if (sacrificeOptions.length === 0) return null;
   }
   const exclude = ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : [];
-  if (ab.cost.mana && !canPay(state, pid, parseCost(ab.cost.mana), exclude)) return null;
+  const manaCost = abilityMana(state, pid, ab);
+  if (manaCost && !canPay(state, pid, parseCost(manaCost), exclude)) return null;
   let targets = specViews(state, ab.targets, pid, card.id);
   if (!targets) return null;
   if (ab.equip) {
@@ -607,7 +633,9 @@ export function applyAction(state: GameState, pid: PlayerId, action: Action): vo
     const inc = card.inc;
     const sourceSnap = snapshot(state, card);
     const mult = manaMultiplier(state, card);
-    if (ab.cost.mana) pay(state, pid, parseCost(ab.cost.mana), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
+    const manaCost = abilityMana(state, pid, ab);
+    if (manaCost) pay(state, pid, parseCost(manaCost), ab.cost.tap || ab.cost.sacrificeSelf ? [card.id] : []);
+    if (ab.equip) p.equipTurn = state.turn;
     if (ab.cost.tap) tapPermanent(state, card);
     if (ab.cost.life) loseLife(state, pid, ab.cost.life);
     if (ab.cost.sacrifice) {

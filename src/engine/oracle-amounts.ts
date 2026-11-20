@@ -31,6 +31,8 @@ function nounFilter(phrase: string): CardFilter | null {
     else if (w === 'nontoken') f.nontoken = true;
     else if (w === 'token') f.token = true;
     else if (w === 'other' || w === 'another') f.other = true;
+    else if (w === 'equipped') f.custom = (s, c) => battlefieldCards(s).some((x) => x.attachedTo === c.id && (findDef(x.def)?.subtypes ?? []).includes('Equipment'));
+    else if (w === 'attacking') f.attacking = true;
     else if (w === 'tapped') f.custom = (_s, c) => c.tapped;
     else if (w === 'untapped') f.custom = (_s, c) => !c.tapped;
     else if (w === 'basic') f.basicLand = true;

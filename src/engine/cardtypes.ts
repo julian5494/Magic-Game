@@ -243,8 +243,24 @@ export interface TriggeredAbility {
 }
 
 export type StaticAbility =
-  | { kind: 'anthem'; filter: CardFilter; power: number; toughness: number; keywords?: Keyword[] }
-  | { kind: 'attached'; power?: number; toughness?: number; keywords?: Keyword[]; cantAttackOrBlock?: boolean }
+  | { kind: 'anthem'; filter: CardFilter; power: number; toughness: number; keywords?: Keyword[]; scale?: (state: GameState, src: CardInstance, card: CardInstance) => number }
+  | {
+      kind: 'attached';
+      power?: number;
+      toughness?: number;
+      keywords?: Keyword[];
+      cantAttackOrBlock?: boolean;
+      /** "+1/+1 for each land you control": the bonus is multiplied by this. */
+      scale?: (state: GameState, src: CardInstance, card: CardInstance) => number;
+      /** "... and loses flying". */
+      loseKeywords?: Keyword[];
+      /** "As long as equipped creature is legendary, ...". */
+      condition?: (state: GameState, card: CardInstance) => boolean;
+    }
+  /** Equip costs change: Puresteel Paladin ({0} with metalcraft), Bruenor (first each turn {0}), "cost {2} less". */
+  | { kind: 'equipCost'; set?: number; reduce?: number; when?: 'metalcraft' | 'firstEachTurn' }
+  /** "Your opponents can't cast spells during your turn." (whileAttached: only while this is attached to a creature) */
+  | { kind: 'oppsNoCastYourTurn'; whileAttached?: boolean }
   | { kind: 'noMaxHandSize' }
   | { kind: 'extraLand'; n: number }
   | { kind: 'preventNoncombatDamageToOtherCreatures' }

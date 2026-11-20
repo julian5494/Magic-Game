@@ -568,6 +568,8 @@ export function startTurn(state: GameState, pid: PlayerId): void {
     p.extraLandsThisTurn = 0;
     state.spellsThisTurn = 0;
     state.diedThisTurn = 0;
+    state.combatsThisTurn = 0;
+    state.extraCombats = undefined;
     p.lifeGainedThisTurn = 0;
     p.spellsCast = 0;
     p.noncreatureCast = 0;
@@ -757,6 +759,18 @@ export function advanceStep(state: GameState): void {
   let next = STEP_ORDER[STEP_ORDER.indexOf(state.step) + 1];
   if (state.step === 'declareAttackers' && (!state.combat || state.combat.attackers.length === 0)) next = 'endCombat';
   if (state.step === 'endCombat') state.combat = null;
+  // Additional combat phases (capped so a loop of "extra combat" effects can't stall the game).
+  const extra = state.extraCombats;
+  if (extra && (state.combatsThisTurn ?? 0) < 12) {
+    if (state.step === 'endCombat' && extra.afterCombat > 0) {
+      extra.afterCombat--;
+      next = 'beginCombat';
+    } else if ((state.step === 'main1' || state.step === 'main2') && extra.afterMain > 0 && next !== 'beginCombat') {
+      extra.afterMain--;
+      next = 'beginCombat';
+    }
+  }
+  if (next === 'beginCombat') state.combatsThisTurn = (state.combatsThisTurn ?? 0) + 1;
   enterStep(state, next);
 }
 
