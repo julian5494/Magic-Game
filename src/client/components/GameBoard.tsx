@@ -138,6 +138,8 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   }, [held]);
   const suppressClick = useRef(false);
   const [topPin, setTopPin] = useState<PlayerId | null>(null);
+  // On the 3D table: an opponent's whole board brought across the table at full size (until you go back).
+  const [farFocus, setFarFocus] = useState<PlayerId | null>(null);
   const [fullBoard, setFullBoard] = useState<PlayerId | null>(null);
   const [calm, setCalm] = useState(() => readFlag(CALM_KEY));
   const table = useTableSettings();
@@ -215,7 +217,10 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') cancelAll();
+      if (e.key === 'Escape') {
+        cancelAll();
+        setFarFocus(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -675,10 +680,15 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   // The active player sits across the table; on your turn it's the next opponent. You can pin someone else there.
   useEffect(() => setTopPin(null), [view.activePlayer]);
   const autoTop = myTurn ? (liveOpps[0] ?? opponents[0])?.id : view.activePlayer;
-  const topId = topPin && view.players.some((p) => p.id === topPin && p.id !== view.you) ? topPin : autoTop;
+  const valid = (pid: PlayerId | null) => !!pid && view.players.some((p) => p.id === pid && p.id !== view.you);
+  const focused = table3d && valid(farFocus) ? farFocus : null;
+  const topId = focused ?? (valid(topPin) ? topPin : autoTop);
   const topP = view.players.find((p) => p.id === topId);
   const sideSeats = opponents.filter((p) => p.id !== topId);
-  const topActive = topP?.id === view.activePlayer;
+  // The board across the table is shown big on its owner's turn, or while you're looking at it.
+  const topActive = topP?.id === view.activePlayer || !!focused;
+  /** "Full board": on the 3D table, bring it across the table; otherwise open it in a window. */
+  const viewBoard = (pid: PlayerId) => (table3d ? setFarFocus(pid) : setFullBoard(pid));
 
   // ---------- Combat preview ----------
   let preview: CombatPreview | null = null;
@@ -912,7 +922,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
               })}
               <span className="rail-tail">{buttons.filter((b) => b.at === 'tail').map(btn)}</span>
             </div>
-            {mat(me, 'near', myTurn ? 'full' : 'tile', !topActive)}
+            {mat(me, 'near', myTurn && !focused ? 'full' : 'tile', !topActive)}
           </div>
   );
 
@@ -934,7 +944,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
             </small>
             <CmdDamage p={topP} />
           </div>
-          <button className="tbtn quiet tiny" onClick={(e) => { e.stopPropagation(); setFullBoard(topP.id); }}>
+          <button className="tbtn quiet tiny" onClick={(e) => { e.stopPropagation(); viewBoard(topP.id); }}>
             ⤢
           </button>
         </div>
@@ -956,7 +966,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
                   <button className="tbtn quiet tiny" onClick={(e) => { e.stopPropagation(); setTopPin(p.id); }}>
                     ⇅ Top seat
                   </button>
-                  <button className="tbtn quiet tiny" onClick={(e) => { e.stopPropagation(); setFullBoard(p.id); }}>
+                  <button className="tbtn quiet tiny" onClick={(e) => { e.stopPropagation(); viewBoard(p.id); }}>
                     ⤢ Full board
                   </button>
                   <MatPicker value={matOf(p.id)} onChange={(m) => setMat(p.id, m)} />
@@ -1178,6 +1188,19 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         </div>
       )}
 
+      {focused && topP && (
+        <div className="focus-banner" style={{ ['--seat' as string]: colorOf(topP.id) }}>
+          Looking at <strong>{topP.name}</strong>'s board
+          {opponents.filter((p) => p.id !== topP.id && !p.lost).map((p) => (
+            <button key={p.id} className="tbtn quiet tiny" onClick={(e) => { e.stopPropagation(); setFarFocus(p.id); }}>
+              {p.name}
+            </button>
+          ))}
+          <button className="tbtn glow tiny" onClick={(e) => { e.stopPropagation(); setFarFocus(null); }}>
+            ◀ Back to my board
+          </button>
+        </div>
+      )}
       <ArrowLayer arrows={arrows} />
 
       {hover && !drag && !aiming && (

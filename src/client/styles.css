@@ -952,3 +952,8 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .action-pop .pop-check { display: flex; align-items: center; gap: 6px; padding: 5px 4px; font: 600 13px Inter, sans-serif; color: #f0dcb4; cursor: pointer; white-space: nowrap; }
 .action-pop .pop-check .flag { margin-left: auto; }
 .action-pop .pop-note { max-width: 230px; padding: 4px 4px 2px; font: 500 11px Inter, sans-serif; color: #c9b08a; }
+
+/* Looking at another player's board across the 3D table. */
+.focus-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 46; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-radius: 12px;
+  font: 600 13px Inter, sans-serif; color: #f0dcb4; background: #1e140cf0; box-shadow: 0 0 0 1px #000, 0 0 0 2px var(--seat, #d4a650), 0 10px 26px #000a; }
+.focus-banner strong { font-family: Cinzel, Georgia, serif; color: #ffd98a; }
