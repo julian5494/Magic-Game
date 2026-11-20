@@ -1166,8 +1166,19 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
             <label>
               <input type="checkbox" checked={soundPrefs.muted} onChange={(e) => sound.setMuted(e.target.checked)} /> Mute
             </label>
+            <label className="sound-row">
+              Music{' '}
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(soundPrefs.musicVolume * 100)}
+                onChange={(e) => sound.setMusicVolume(Number(e.target.value) / 100)}
+                aria-label="Music volume"
+              />
+            </label>
             <label>
-              <input type="checkbox" checked={soundPrefs.ambience} onChange={(e) => sound.setAmbience(e.target.checked)} /> Crackling hearth
+              <input type="checkbox" checked={soundPrefs.ambience} onChange={(e) => sound.setAmbience(e.target.checked)} /> Tavern sounds (fire, crowd)
             </label>
             <MatPicker value={matOf(view.you)} onChange={(m) => setMat(view.you, m)} label="My playmat" />
             <button className="tbtn quiet" onClick={() => confirm('Concede this game?') && act({ type: 'concede' })}>
@@ -1500,5 +1511,5 @@ function ArrowLayer({ arrows }: { arrows: Arrow[] }) {
 function useSoundPrefs() {
   const [, bump] = useState(0);
   useEffect(() => sound.subscribe(() => bump((n) => n + 1)), []);
-  return { volume: sound.volume, muted: sound.muted, ambience: sound.ambience };
+  return { volume: sound.volume, muted: sound.muted, ambience: sound.ambience, musicVolume: sound.musicVolume };
 }

@@ -1,3 +1,5 @@
+import { TavernAudio } from './tavernAudio';
+
 // Sound effects, synthesized in the browser (no audio files): soft whooshes, wooden thuds, bells and
 // shimmers, all sent through one warm reverb so they sit in the same room. Plus an optional
 // crackling-hearth ambience for the tavern.
@@ -35,6 +37,7 @@ export interface SoundOpts {
 const VOL_KEY = 'commander-arena-volume';
 const MUTE_KEY = 'commander-arena-muted';
 const AMB_KEY = 'commander-arena-ambience';
+const MUSIC_KEY = 'commander-arena-music';
 
 const load = (k: string, d: string) => {
   try {
@@ -68,13 +71,15 @@ class SoundEngine {
   private amb!: GainNode;
   private send!: GainNode;
   private noise!: AudioBuffer;
-  private ambTimer = 0;
-  private ambNodes: AudioNode[] = [];
+  private music!: GainNode;
+  private tavern: TavernAudio | null = null;
   private wantAmbience = false;
   private last: Record<string, number> = {};
   volume = Number(load(VOL_KEY, '0.6'));
   muted = load(MUTE_KEY, 'off') === 'on';
   ambience = load(AMB_KEY, 'on') === 'on';
+  /** Music volume, 0..1 (0 = off). */
+  musicVolume = Number(load(MUSIC_KEY, '0.4'));
   private listeners = new Set<() => void>();
 
   constructor(offline = false) {
@@ -116,8 +121,14 @@ class SoundEngine {
   setAmbience(on: boolean) {
     this.ambience = on;
     save(AMB_KEY, on ? 'on' : 'off');
-    if (on && this.wantAmbience) this.startAmbience();
-    else this.stopAmbienceNodes();
+    this.syncTavern();
+    this.changed();
+  }
+  setMusicVolume(v: number) {
+    this.musicVolume = Math.max(0, Math.min(1, v));
+    save(MUSIC_KEY, String(this.musicVolume));
+    this.applyLevels();
+    this.syncTavern();
     this.changed();
   }
 
@@ -125,6 +136,7 @@ class SoundEngine {
     if (!this.ctx) return;
     const v = this.muted ? 0 : this.volume * this.volume; // perceptual curve
     this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+    this.music?.gain.setTargetAtTime(this.musicVolume * this.musicVolume * 0.6, this.ctx.currentTime, 0.1);
   }
 
   private ensure(): AudioContext | null {
@@ -163,6 +175,9 @@ class SoundEngine {
     this.amb = ctx.createGain();
     this.amb.gain.value = 0.5;
     this.amb.connect(this.master);
+    this.music = ctx.createGain();
+    this.music.gain.value = 0;
+    this.music.connect(this.master);
     // Shared room reverb.
     const verb = ctx.createConvolver();
     verb.buffer = this.impulse(2.4);
@@ -177,7 +192,11 @@ class SoundEngine {
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     this.noise = n;
     this.applyLevels();
-    if (this.wantAmbience && this.ambience) this.startAmbience();
+    // Offline renders (the sound board's level checks) don't get a tavern.
+    if (typeof OfflineAudioContext === 'undefined' || !(ctx instanceof OfflineAudioContext)) {
+      this.tavern = new TavernAudio(ctx, this.amb, this.music, this.send);
+      this.syncTavern();
+    }
   }
 
   /** A warm, slightly dark room: stereo noise with an exponential tail, softened over time. */
@@ -313,17 +332,13 @@ class SoundEngine {
         // A card set down firmly on the wooden table.
         this.tone(t, { f: 150, f2: 52, dur: 0.28, gain: 0.55 * k, pan, rev: 0.15 });
         this.hiss(t, { type: 'lowpass', f: 900, dur: 0.07, gain: 0.32 * k, pan, rev: 0.15 });
-        this.tone(t, { type: 'triangle', f: 230, f2: 205, dur: 0.14, gain: 0.06 * k, pan, rev: 0.2 });
-        this.sparkle(t + 0.06, 2, 0.012 * k, pan);
+        this.tone(t, { type: 'triangle', f: 230, f2: 205, dur: 0.14, gain: 0.04 * k, pan, rev: 0.2, lp: 900 });
         break;
       case 'cast': {
-        // A swell of air and a shimmering chord in the spell's colors.
-        this.hiss(t, { f: 380, f2: 2600, q: 0.8, dur: 0.42, a: 0.18, gain: 0.2 * k, pan, rev: 0.4 });
-        this.chord(o.colors).forEach((f, i) => {
-          this.tone(t + 0.08 + i * 0.045, { f, dur: 0.9, a: 0.06, gain: 0.045 * k, pan, rev: 0.6, lp: 4000 });
-          this.tone(t + 0.08 + i * 0.045, { f: f * 2, dur: 0.6, a: 0.06, gain: 0.015 * k, pan, rev: 0.7, detune: 6 });
-        });
-        if (o.colors?.includes('R')) for (let i = 0; i < 5; i++) this.hiss(t + 0.05 + Math.random() * 0.4, { type: 'highpass', f: 3000, dur: 0.02, gain: 0.07 * k, pan });
+        // A soft swell of air and a low, muted chord in the spell's colors (no bright pings).
+        this.hiss(t, { type: 'lowpass', f: 300, f2: 1600, q: 0.6, dur: 0.45, a: 0.2, gain: 0.2 * k, pan, rev: 0.4 });
+        this.chord(o.colors).forEach((f, i) => this.tone(t + 0.1 + i * 0.05, { type: 'triangle', f: f / 2, dur: 0.8, a: 0.12, gain: 0.035 * k, pan, rev: 0.55, lp: 1400 }));
+        if (o.colors?.includes('R')) for (let i = 0; i < 4; i++) this.hiss(t + 0.05 + Math.random() * 0.4, { type: 'bandpass', f: 2200, q: 1, dur: 0.015, gain: 0.04 * k, pan });
         break;
       }
       case 'commander':
@@ -343,17 +358,16 @@ class SoundEngine {
         break;
       }
       case 'creature': {
-        // Weight: bigger creatures land lower and longer.
+        // A body landing on the table: weight by power, with a warm low swell rather than chimes.
         const f = 110 - size * 50;
-        this.tone(t, { f, f2: f * 0.4, dur: 0.35 + size * 0.4, gain: (0.5 + size * 0.35) * k, pan, rev: 0.25 });
-        this.hiss(t, { type: 'lowpass', f: 500 + size * 300, dur: 0.22 + size * 0.2, gain: (0.22 + size * 0.15) * k, pan, rev: 0.25 });
-        this.chord(o.colors).slice(0, 3).forEach((cf, i) => this.tone(t + 0.05 + i * 0.03, { f: cf, dur: 0.7, a: 0.03, gain: 0.025 * k, pan, rev: 0.6, lp: 3000 }));
-        this.sparkle(t + 0.08, 3, 0.015 * k, pan);
+        this.tone(t, { f, f2: f * 0.45, dur: 0.35 + size * 0.4, gain: (0.45 + size * 0.35) * k, pan, rev: 0.25 });
+        this.hiss(t, { type: 'lowpass', f: 450 + size * 250, dur: 0.22 + size * 0.2, gain: (0.18 + size * 0.15) * k, pan, rev: 0.25 });
+        this.tone(t + 0.04, { type: 'triangle', f: this.chord(o.colors)[0] / 2, dur: 0.6, a: 0.06, gain: 0.03 * k, pan, rev: 0.5, lp: 900 });
         break;
       }
       case 'permanent':
-        this.tone(t, { f: 120, f2: 60, dur: 0.2, gain: 0.35 * k, pan, rev: 0.2 });
-        for (const [f, g] of [[660, 0.05], [990, 0.035], [1485, 0.02]]) this.tone(t + 0.02, { type: 'triangle', f, dur: 0.5, gain: g * k, pan, rev: 0.5 });
+        this.tone(t, { f: 120, f2: 60, dur: 0.2, gain: 0.32 * k, pan, rev: 0.2 });
+        this.tone(t + 0.02, { type: 'triangle', f: 330, dur: 0.45, a: 0.03, gain: 0.025 * k, pan, rev: 0.4, lp: 1100 });
         break;
       case 'token':
         this.tone(t, { f: 520, f2: 880, dur: 0.09, gain: 0.2 * k, pan, rev: 0.3 });
@@ -483,76 +497,19 @@ class SoundEngine {
     }
   }
 
-  // ------------------------------------------------------------------ hearth ambience
-  /** Ask for the crackling-fire ambience (it starts once audio is allowed and the setting is on). */
+  // ------------------------------------------------------------------ the tavern around you
+  /** Ask for the tavern's ambience and music (they start once audio is allowed, as the settings say). */
   wantHearth(on: boolean): void {
     this.wantAmbience = on;
-    if (on && this.ambience) this.startAmbience();
-    else this.stopAmbienceNodes();
+    this.syncTavern();
   }
 
-  private startAmbience(): void {
-    const ctx = this.ctx;
-    if (!ctx || this.ambNodes.length) return;
-    // A low roar of the fire and a quiet room.
-    const roar = ctx.createBufferSource();
-    roar.buffer = this.noise;
-    roar.loop = true;
-    const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 320;
-    const g = ctx.createGain();
-    g.gain.value = 0.05;
-    // The roar breathes slowly.
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 0.13;
-    const lfoG = ctx.createGain();
-    lfoG.gain.value = 0.02;
-    lfo.connect(lfoG).connect(g.gain);
-    roar.connect(lp).connect(g).connect(this.amb);
-    roar.start();
-    lfo.start();
-    this.ambNodes = [roar, lfo];
-    // Pops and crackles at random.
-    const tick = () => {
-      if (!this.ctx || this.muted) return;
-      const t0 = this.ctx.currentTime;
-      const n = Math.random() < 0.3 ? 2 + Math.floor(Math.random() * 4) : Math.random() < 0.6 ? 1 : 0;
-      for (let i = 0; i < n; i++) {
-        const t = t0 + Math.random() * 0.25;
-        const src = this.ctx.createBufferSource();
-        src.buffer = this.noise;
-        const f = this.ctx.createBiquadFilter();
-        f.type = 'bandpass';
-        f.frequency.value = 900 + Math.random() * 3500;
-        f.Q.value = 0.8 + Math.random() * 2;
-        const gg = this.ctx.createGain();
-        const peak = 0.015 + Math.random() * Math.random() * 0.09;
-        gg.gain.setValueAtTime(0.0001, t);
-        gg.gain.exponentialRampToValueAtTime(peak, t + 0.002);
-        gg.gain.exponentialRampToValueAtTime(0.0001, t + 0.015 + Math.random() * 0.05);
-        const p = this.ctx.createStereoPanner();
-        p.pan.value = 0.25 + Math.random() * 0.3; // the hearth is off to the right
-        src.connect(f).connect(gg).connect(p).connect(this.amb);
-        src.start(t, Math.random() * 1.8);
-        src.stop(t + 0.1);
-      }
-    };
-    this.ambTimer = window.setInterval(tick, 260);
-  }
-
-  private stopAmbienceNodes(): void {
-    window.clearInterval(this.ambTimer);
-    this.ambTimer = 0;
-    for (const n of this.ambNodes) {
-      try {
-        (n as AudioScheduledSourceNode).stop();
-      } catch {
-        /* already stopped */
-      }
-      n.disconnect();
-    }
-    this.ambNodes = [];
+  private syncTavern(): void {
+    if (!this.tavern) return;
+    if (this.wantAmbience && this.ambience) void this.tavern.startAmbience();
+    else this.tavern.stopAmbience();
+    if (this.wantAmbience && this.musicVolume > 0) void this.tavern.startMusic();
+    else this.tavern.stopMusic();
   }
 }
 

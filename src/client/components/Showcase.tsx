@@ -70,8 +70,12 @@ function SoundBoard() {
         Every sound in the game is made in your browser. Volume{' '}
         <input type="range" min={0} max={100} value={Math.round(sound.volume * 100)} onChange={(e) => sound.setVolume(Number(e.target.value) / 100)} />{' '}
         <label>
-          <input type="checkbox" checked={sound.ambience} onChange={(e) => sound.setAmbience(e.target.checked)} onClick={() => sound.wantHearth(true)} /> Crackling hearth
-        </label>
+          <input type="checkbox" checked={sound.ambience} onChange={(e) => sound.setAmbience(e.target.checked)} /> Tavern sounds
+        </label>{' '}
+        Music <input type="range" min={0} max={100} value={Math.round(sound.musicVolume * 100)} onChange={(e) => sound.setMusicVolume(Number(e.target.value) / 100)} />{' '}
+        <button className="tbtn quiet tiny" onClick={() => sound.wantHearth(true)}>
+          Play the tavern
+        </button>
       </p>
       <div className="sound-grid">
         {SOUND_NAMES.map((n) => (
