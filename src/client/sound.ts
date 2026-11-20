@@ -7,13 +7,16 @@ type Color = 'W' | 'U' | 'B' | 'R' | 'G';
 export type SoundName =
   | 'draw' | 'land' | 'cast' | 'ability' | 'resolve' | 'creature' | 'permanent' | 'token' | 'dies' | 'destroy' | 'exile'
   | 'bounce' | 'countered' | 'attack' | 'block' | 'damage' | 'lifeGain' | 'lifeLoss' | 'counter' | 'tap' | 'yourTurn'
-  | 'theirTurn' | 'prompt' | 'click' | 'pickup' | 'cancel' | 'shuffle' | 'win' | 'lose' | 'monarch' | 'commander';
+  | 'theirTurn' | 'prompt' | 'click' | 'pickup' | 'cancel' | 'shuffle' | 'win' | 'lose' | 'monarch' | 'commander'
+  // Touching things on the table.
+  | 'coins' | 'shing' | 'clink' | 'whoosh' | 'knock' | 'flip' | 'rustle' | 'creak';
 
 /** Every sound, in the order the sound board lists them. */
 export const SOUND_NAMES: SoundName[] = [
   'draw', 'shuffle', 'land', 'cast', 'commander', 'ability', 'resolve', 'creature', 'permanent', 'token', 'tap', 'counter',
   'attack', 'block', 'damage', 'dies', 'destroy', 'exile', 'bounce', 'countered', 'lifeGain', 'lifeLoss', 'monarch',
   'yourTurn', 'theirTurn', 'prompt', 'pickup', 'cancel', 'click', 'win', 'lose',
+  'coins', 'shing', 'clink', 'whoosh', 'knock', 'flip', 'rustle', 'creak',
 ];
 
 export interface SoundOpts {
@@ -428,6 +431,43 @@ class SoundEngine {
       case 'monarch':
         this.chord(['W']).forEach((f, i) => this.tone(t + i * 0.08, { type: 'triangle', f, dur: 1.2, a: 0.05, gain: 0.045 * k, rev: 0.6, lp: 3000 }));
         this.bell(t + 0.3, 523.25, 0.05 * k, 2);
+        break;
+      case 'coins':
+        // A handful of coins jingling in a leather bag.
+        for (let i = 0; i < 9; i++) {
+          const d = Math.random() * 0.35;
+          const f = 2600 + Math.random() * 2400;
+          for (const [r, g] of [[1, 0.05], [1.51, 0.03], [2.32, 0.018]]) this.tone(t + d, { type: 'triangle', f: f * r, dur: 0.12 + Math.random() * 0.1, gain: g * k * (0.5 + Math.random() * 0.5), pan: pan + (Math.random() - 0.5) * 0.3, rev: 0.25 });
+        }
+        this.hiss(t, { type: 'lowpass', f: 600, dur: 0.3, gain: 0.08 * k, pan, rev: 0.1 });
+        break;
+      case 'shing':
+        // Steel ringing: a bright scrape and a long, thin tone.
+        this.hiss(t, { f: 5000, f2: 9000, q: 3, dur: 0.25, a: 0.01, gain: 0.08 * k, pan, rev: 0.4 });
+        for (const [f, g] of [[3150, 0.05], [4720, 0.03], [6890, 0.015]]) this.tone(t, { f, dur: 1.2, a: 0.004, gain: g * k, pan, rev: 0.5 });
+        break;
+      case 'clink':
+        for (const [f, g] of [[1240, 0.07], [1863, 0.04], [2905, 0.025]]) this.tone(t, { type: 'triangle', f, dur: 0.5, a: 0.002, gain: g * k, pan, rev: 0.35 });
+        this.hiss(t + 0.08, { type: 'lowpass', f: 900, dur: 0.25, a: 0.05, gain: 0.05 * k, pan, rev: 0.2 });
+        break;
+      case 'whoosh':
+        this.hiss(t, { type: 'lowpass', f: 300, f2: 1400, dur: 0.45, a: 0.12, gain: 0.25 * k, pan, rev: 0.3 });
+        break;
+      case 'knock':
+        this.tone(t, { f: 180, f2: 70, dur: 0.22, gain: 0.45 * k, pan, rev: 0.25 });
+        this.hiss(t, { type: 'lowpass', f: 1000, dur: 0.05, gain: 0.25 * k, pan, rev: 0.2 });
+        this.tone(t + 0.16, { f: 170, f2: 70, dur: 0.18, gain: 0.3 * k, pan, rev: 0.25 });
+        break;
+      case 'flip':
+        this.hiss(t, { f: 2500, q: 2, dur: 0.03, gain: 0.15 * k, pan });
+        this.tone(t + 0.85, { f: 260, f2: 180, dur: 0.12, gain: 0.25 * k, pan, rev: 0.2 });
+        this.hiss(t + 0.85, { type: 'lowpass', f: 1200, dur: 0.04, gain: 0.15 * k, pan });
+        break;
+      case 'rustle':
+        for (let i = 0; i < 6; i++) this.hiss(t + i * 0.04 + Math.random() * 0.03, { f: 3000 + Math.random() * 2000, q: 0.8, dur: 0.06, gain: 0.06 * k, pan });
+        break;
+      case 'creak':
+        this.tone(t, { type: 'sawtooth', f: 140, f2: 110, dur: 0.5, a: 0.05, gain: 0.03 * k, pan, rev: 0.3, lp: 900 });
         break;
       case 'win':
         [261.6, 329.6, 392, 523.25, 659.25].forEach((f, i) => {

@@ -648,3 +648,43 @@ export function tooledEmblem(size = 256): THREE.CanvasTexture {
   }
   return normalFromHeight(heightOf(c, 2), size, size, 3);
 }
+
+/** Beer foam: packed bubbles of many sizes, creamy with darker rims, and a matching relief. */
+export function foamTexture(size = 256, seed = 4): { map: THREE.CanvasTexture; normalMap: THREE.CanvasTexture } {
+  const R = rng(seed);
+  const c = canvas(size, size);
+  const ctx = ctx2d(c);
+  ctx.fillStyle = '#e9dcc0';
+  ctx.fillRect(0, 0, size, size);
+  const h = canvas(size, size);
+  const hx = ctx2d(h);
+  hx.fillStyle = '#404040';
+  hx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 900; i++) {
+    const x = R() * size;
+    const y = R() * size;
+    const r = 1 + Math.pow(R(), 3) * 9;
+    for (const [dx, dy] of [[0, 0], [size, 0], [-size, 0], [0, size], [0, -size]]) {
+      const g = ctx.createRadialGradient(x + dx - r * 0.3, y + dy - r * 0.3, 0, x + dx, y + dy, r);
+      g.addColorStop(0, '#fffaf0');
+      g.addColorStop(0.7, '#f4ead4');
+      g.addColorStop(1, '#bfae8c');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x + dx, y + dy, r, 0, Math.PI * 2);
+      ctx.fill();
+      const hg = hx.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, r);
+      hg.addColorStop(0, '#ffffff');
+      hg.addColorStop(0.85, '#b0b0b0');
+      hg.addColorStop(1, '#404040');
+      hx.fillStyle = hg;
+      hx.beginPath();
+      hx.arc(x + dx, y + dy, r, 0, Math.PI * 2);
+      hx.fill();
+    }
+  }
+  const map = tex(c, { repeat: true });
+  const normalMap = normalFromHeight(heightOf(h, 1), size, size, 2.5);
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+  return { map, normalMap };
+}

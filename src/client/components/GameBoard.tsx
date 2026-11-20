@@ -106,6 +106,14 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     };
   }, []);
   const soundPrefs = useSoundPrefs();
+  /** Clicking empty table space on the 3D table: whatever prop is there reacts (with its sound). */
+  const pokeTable = (e: React.MouseEvent) => {
+    if (!table3d || !(e.target instanceof Element)) return;
+    if (e.target.closest('[data-card-id], [data-player-id], button, input, select, label, .hud, .hand-fan, .rail, .seat-tab, .modal, .preview-wrap, .stack-panel, .log, .action-pop')) return;
+    const kind = table3d.poke(e.clientX, e.clientY);
+    const SOUND = { candle: 'whoosh', mug: 'clink', box: 'knock', coins: 'coins', hourglass: 'flip', dagger: 'shing', ink: 'clink', paper: 'rustle', tray: 'knock', barrel: 'knock', chair: 'creak' } as const;
+    if (kind) sound.play(SOUND[kind]);
+  };
   const [previewSide, setPreviewSide] = useState<'left' | 'right'>('left');
   const hover = hoverCard ? view.cards[hoverCard.id] ?? hoverCard : null;
   const [pending, setPending] = useState<Pending | null>(null);
@@ -928,7 +936,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   );
 
   return (
-    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={() => { setMenu(null); setStopMenu(null); }} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
+    <div className={`tavern ${table3d ? 'three' : ''} ${myTurn ? 'my-turn' : 'their-turn'} ${calm ? 'calm' : ''} ${drag ? 'dragging' : ''}`} onClick={(e) => { setMenu(null); setStopMenu(null); pokeTable(e); }} onContextMenu={(e) => { if (held || pending || menu || selBlocker) { e.preventDefault(); cancelAll(); } }}>
       <div className="table3d" ref={tableRef} />
       {table3d ? createPortal(planeEl, boardEl) : <div className="stage">{planeEl}</div>}
 

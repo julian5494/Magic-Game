@@ -293,8 +293,18 @@ export function dagger(M: Mats): THREE.Group {
   g.add(pommel);
   // Sunk 2cm into the wood, leaning away from you.
   g.position.y = -2;
+  // A glint that runs down the blade when it's touched.
+  const glint = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glow('rgba(255,255,255,1)', 'rgba(200,225,255,.35)'), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: 0 }));
+  glint.scale.set(4, 4, 1);
+  g.add(glint);
   const holder = new THREE.Group();
   holder.add(g);
+  holder.userData.glint = (k: number) => {
+    // k: 0..1 along the blade, from the guard to the tip.
+    glint.position.set(0, 13 - k * 12, 0.3);
+    glint.material.opacity = k <= 0 || k >= 1 ? 0 : Math.sin(k * Math.PI);
+    glint.scale.setScalar(3 + Math.sin(k * Math.PI) * 3);
+  };
   g.rotation.set(-0.32, 0.5, 0.12);
   return shadowed(holder);
 }
@@ -577,6 +587,23 @@ export function candle(M: Mats): { group: THREE.Group; flicker: Flicker } {
   g.add(light);
   shadowed(g);
   flame.castShadow = halo.castShadow = false;
+  // Burning down over the match (0 = new, 1 = a stub): everything at the top moves down; the light stays as bright.
+  const drips = g.children.filter((c) => (c as THREE.Mesh).geometry instanceof THREE.CapsuleGeometry);
+  const dripY = drips.map((d) => d.position.y);
+  g.userData.burn = (f: number) => {
+    const h = 10 * (1 - 0.68 * Math.max(0, Math.min(1, f)));
+    const drop = 10 - h;
+    bm.scale.y = h / 10;
+    bm.position.y = 0.6 + h / 2;
+    top.position.y = wick.position.y = 10.6 - drop;
+    flame.position.y = 12.2 - drop;
+    halo.position.y = 12 - drop;
+    light.position.y = 13 - drop;
+    drips.forEach((d, i) => {
+      d.position.y = dripY[i] - drop;
+      d.visible = d.position.y > 1.6;
+    });
+  };
   return { group: g, flicker: { light, flame, halo, base: 650 } };
 }
 
@@ -623,23 +650,58 @@ export function lantern(M: Mats): { group: THREE.Group; flicker: Flicker } {
 }
 
 // ------------------------------------------------------------------ drinks
+let foamTex: ReturnType<typeof T.foamTexture> | null = null;
+
+/**
+ * A head of beer: a domed, bubbly foam (slightly over the rim), breathing gently, with little bubbles that keep
+ * rising to the surface and popping. Sets userData.tick on the cup.
+ */
 function foam(g: THREE.Group, y: number, r: number, seed: number) {
-  const foamMat = new THREE.MeshPhysicalMaterial({ color: 0xfbf2de, roughness: 0.85, sheen: 1, sheenColor: new THREE.Color(0xffffff) });
-  const cap = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), foamMat);
-  cap.scale.y = 0.32;
-  cap.position.y = y;
-  g.add(cap);
-  const R = rng(seed);
-  const bub = new THREE.SphereGeometry(1, 12, 8);
-  for (let i = 0; i < 32; i++) {
-    const a = R() * Math.PI * 2;
-    const d = Math.sqrt(R()) * (r - 0.3);
-    const b = new THREE.Mesh(bub, foamMat);
-    b.scale.setScalar(0.35 + R() * 0.45);
-    b.scale.y *= 0.6;
-    b.position.set(Math.cos(a) * d, y + 0.45 + (1 - d / r) * 0.9, Math.sin(a) * d);
-    g.add(b);
+  foamTex ??= T.foamTexture();
+  const N = makeNoise(seed);
+  const foamMat = new THREE.MeshPhysicalMaterial({ map: foamTex.map, normalMap: foamTex.normalMap, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.82, sheen: 0.6, sheenColor: new THREE.Color(0xfff6e0), color: 0xfff8ee });
+  const geo = new THREE.SphereGeometry(r * 1.04, 40, 14, 0, Math.PI * 2, 0, Math.PI / 2);
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const z = p.getZ(i);
+    const yy = p.getY(i);
+    // Lumpy, rising a little higher in the middle, spilling slightly at the rim.
+    const lump = 1 + N.fbm(x * 0.6, z * 0.6, 3) * 0.25;
+    p.setY(i, yy * 0.42 * lump);
   }
+  geo.computeVertexNormals();
+  const head = new THREE.Mesh(geo, foamMat);
+  head.position.y = y - 0.15;
+  g.add(head);
+  // Bubbles on the surface: they swell, then pop and come back somewhere else.
+  const R = rng(seed);
+  const n = 26;
+  const bubbleMat = new THREE.MeshPhysicalMaterial({ color: 0xfffbf2, roughness: 0.15, transmission: 0.3, transparent: true, opacity: 0.85, clearcoat: 1 });
+  const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 8), bubbleMat, n);
+  const state = Array.from({ length: n }, () => ({ a: R() * Math.PI * 2, d: Math.sqrt(R()) * (r - 0.4), phase: R(), speed: 0.25 + R() * 0.5, size: 0.12 + R() * 0.22 }));
+  const m = new THREE.Matrix4();
+  const place = (t: number) => {
+    state.forEach((b, i) => {
+      const k = (t * b.speed + b.phase) % 1;
+      // Grow for most of the cycle, then pop.
+      const sc = k < 0.85 ? b.size * Math.sin((k / 0.85) * Math.PI * 0.5) : 0.0001;
+      if (k > 0.99) {
+        b.a = R() * Math.PI * 2;
+        b.d = Math.sqrt(R()) * (r - 0.4);
+      }
+      const h = Math.max(0, 1 - (b.d / r) ** 2);
+      m.compose(new THREE.Vector3(Math.cos(b.a) * b.d, head.position.y + r * 0.42 * Math.sqrt(h) + sc * 0.3, Math.sin(b.a) * b.d), new THREE.Quaternion(), new THREE.Vector3(sc, sc * 0.8, sc));
+      bubbles.setMatrixAt(i, m);
+    });
+    bubbles.instanceMatrix.needsUpdate = true;
+  };
+  place(0);
+  g.add(bubbles);
+  g.userData.tick = (t: number) => {
+    head.scale.y = 1 + Math.sin(t * 0.9) * 0.025;
+    place(t);
+  };
 }
 
 /** Hammered pewter tankard with a foam head and its hinged lid flipped open. */
@@ -784,19 +846,52 @@ export function coinPouch(M: Mats): THREE.Group {
   geo.computeVertexNormals();
   const bag = new THREE.Mesh(geo, mat);
   bag.position.y = 2.6;
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.6, 1.6, 20), mat);
-  neck.position.y = 7.2;
-  const ruff = new THREE.Mesh(new THREE.ConeGeometry(2.2, 1.6, 20, 1, true), mat);
-  ruff.position.y = 8.4;
-  ruff.rotation.x = Math.PI;
-  const tie = new THREE.Mesh(new THREE.TorusGeometry(1.45, 0.22, 8, 30), new THREE.MeshStandardMaterial({ color: 0xc9a06a, roughness: 0.8 }));
+  // The bag is open: a ruffled leather lip folded back around the mouth, dark inside, coins showing.
+  const lipPts: THREE.Vector2[] = [];
+  for (let i = 0; i <= 8; i++) {
+    const t = i / 8;
+    lipPts.push(new THREE.Vector2(1.9 + t * 1.3 + Math.sin(t * Math.PI) * 0.3, t * 1.7 - t * t * 0.5));
+  }
+  const lipGeo = new THREE.LatheGeometry(lipPts, 64);
+  const lp = lipGeo.attributes.position;
+  for (let i = 0; i < lp.count; i++) {
+    const x = lp.getX(i);
+    const z = lp.getZ(i);
+    const yy = lp.getY(i);
+    const a = Math.atan2(z, x);
+    const rad = Math.hypot(x, z);
+    // Gathered folds: the further out, the deeper the ruffle.
+    const fold = Math.sin(a * 11) * 0.22 * (yy / 1.2) + N.noise(a * 3, yy) * 0.12;
+    const k = (rad + fold) / rad;
+    lp.setXYZ(i, x * k, yy + Math.sin(a * 11 + 1) * 0.15 * (yy / 1.2), z * k);
+  }
+  lipGeo.computeVertexNormals();
+  const lipMat = mat.clone();
+  lipMat.side = THREE.DoubleSide;
+  const lip = new THREE.Mesh(lipGeo, lipMat);
+  lip.position.y = 6.2;
+  const inside = new THREE.Mesh(new THREE.CircleGeometry(2.05, 32), new THREE.MeshStandardMaterial({ color: 0x2a1609, roughness: 1 }));
+  inside.rotation.x = -Math.PI / 2;
+  inside.position.y = 6.25;
+  const tie = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.2, 8, 40), new THREE.MeshStandardMaterial({ color: 0xc9a06a, roughness: 0.8 }));
   tie.rotation.x = Math.PI / 2;
-  tie.position.y = 7.1;
-  g.add(bag, neck, ruff, tie);
+  tie.position.y = 6.25;
+  g.add(bag, lip, inside, tie);
+  // Coins heaped in the mouth of the bag.
+  const heapGeo = new THREE.CylinderGeometry(1.05, 1.05, 0.18, 24);
+  const HR = rng(17);
+  for (let i = 0; i < 9; i++) {
+    const c = new THREE.Mesh(heapGeo, M.coin);
+    const a = HR() * Math.PI * 2;
+    const d = HR() * 1.1;
+    c.position.set(Math.cos(a) * d, 6.35 + HR() * 0.6 + (1.1 - d) * 0.3, Math.sin(a) * d);
+    c.rotation.set((HR() - 0.5) * 1.1, HR() * 6, (HR() - 0.5) * 1.1);
+    g.add(c);
+  }
   // Drawstrings hanging from the knot, with knotted ends.
   const cordMat = new THREE.MeshStandardMaterial({ color: 0xb8925e, roughness: 0.85 });
   for (const [dx, dz, len] of [[1, 0.4, 1], [0.6, -0.9, 0.8]]) {
-    const pts = [new THREE.Vector3(1.3 * dx, 7.1, 1.3 * dz), new THREE.Vector3(2.6 * dx, 6.6, 2.4 * dz), new THREE.Vector3(3.6 * dx, 4.6 * len + 1, 3.6 * dz), new THREE.Vector3(4.4 * dx, 2.2 * len + 1.2, 4.6 * dz)];
+    const pts = [new THREE.Vector3(2.0 * dx, 6.3, 2.0 * dz), new THREE.Vector3(2.9 * dx, 6.0, 2.7 * dz), new THREE.Vector3(3.6 * dx, 4.6 * len + 1, 3.6 * dz), new THREE.Vector3(4.4 * dx, 2.2 * len + 1.2, 4.6 * dz)];
     const curve = new THREE.CatmullRomCurve3(pts);
     g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.13, 6), cordMat));
     const knot = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), cordMat);

@@ -10,6 +10,8 @@ import { CSS3DObject, CSS3DRenderer } from 'three/examples/jsm/renderers/CSS3DRe
 import * as Mo from './models';
 import { leatherGrainDataUrl } from './textures';
 
+/** Kinds of things on the table that react to a click. */
+export type PropKind = 'candle' | 'mug' | 'box' | 'coins' | 'hourglass' | 'dagger' | 'ink' | 'paper' | 'tray' | 'barrel' | 'chair';
 export type PropSet = 'candle' | 'lantern';
 
 /** Size of the HTML board in CSS pixels; 10 px = 1 cm on the table. */
@@ -70,6 +72,14 @@ export class TableScene {
   private myDie: Mo.D20 | null = null;
   private cmdGroup = new THREE.Group();
   private wear: THREE.Group | null = null;
+  /** Things on the table you can click, and what kind of thing they are (for the reaction and its sound). */
+  private pokeables: { obj: THREE.Object3D; kind: PropKind }[] = [];
+  /** Reactions playing out: since when, and how. */
+  private pokes = new Map<THREE.Object3D, { t0: number; kind: PropKind; base: THREE.Euler }>();
+  private startedAt = 0;
+  private lastBurn = -10;
+  /** A candle flaring up when clicked (0..1). */
+  private flare = 0;
   private raf = 0;
   private clock = new THREE.Clock();
   private dirty = true;
@@ -145,6 +155,7 @@ export class TableScene {
     s.add(Mo.tableIron(this.M, TABLE_W, TABLE_D));
     // The opponent's chair across the table, and a couple of barrels in the gloom.
     const chair = Mo.chair(this.M);
+    this.pokeables.push({ obj: chair, kind: 'chair' });
     chair.position.set(4, 0, -TABLE_D / 2 - 30);
     chair.rotation.y = 0.07;
     s.add(chair);
@@ -153,6 +164,7 @@ export class TableScene {
       b.position.set(x, -80, z);
       b.rotation.y = ry;
       s.add(b);
+      this.pokeables.push({ obj: b, kind: 'barrel' });
     }
     await nextFrame();
 
@@ -191,6 +203,12 @@ export class TableScene {
     P.crown.visible = false;
     for (const k of ['trayRed', 'trayGreen']) P[k].position.set(0, 0.1, TRAY_Z);
     for (const p of Object.values(P)) s.add(p);
+    const KIND: Record<string, PropKind> = {
+      candle: 'candle', lantern: 'candle', tankard: 'mug', stein: 'mug', boxLeather: 'box', boxCarved: 'box', pouch: 'coins',
+      hourglass: 'hourglass', dagger: 'dagger', inkwell: 'ink', scroll: 'paper', trayRed: 'tray', trayGreen: 'tray',
+    };
+    for (const [k, kind] of Object.entries(KIND)) if (P[k]) this.pokeables.push({ obj: P[k], kind });
+    this.startedAt = performance.now();
     await nextFrame();
 
     this.myDie = new Mo.D20(0x2ec4b6, 40, 3.9, new THREE.Vector3(0, Math.sin(PITCH), Math.cos(PITCH)));
@@ -540,14 +558,16 @@ export class TableScene {
     const t = this.clock.elapsedTime;
     const dieMoving = (this.myDie?.tick(dt) ?? false) || (this.oppDie?.tick(dt) ?? false);
     const camMoved = this.moveCamera(t, dt);
-    if (this.calm && !this.dirty && !dieMoving && !camMoved) return;
+    const poking = this.animateProps(t);
+    if (this.calm && !this.dirty && !dieMoving && !camMoved && !poking) return;
     // Lights flicker.
     if (!this.calm) {
       for (const f of [...this.flickers, this.propFlicker[this.propSet]]) {
         const n = Math.sin(t * 17 + f.base) * 0.5 + Math.sin(t * 29 + 1.3) * 0.3 + Math.sin(t * 7.3) * 0.2;
         const k = f.steady ? 1 + n * 0.05 : 1 + n * 0.14;
         f.light.intensity = f.base * k;
-        if (f.flame) f.flame.scale.y = (f.steady ? 3.6 : 3) * k;
+        const flare = f === this.propFlicker[this.propSet] ? 1 + this.flare * 0.7 : 1;
+        if (f.flame) f.flame.scale.y = (f.steady ? 3.6 : 3) * k * flare;
         if (f.halo) f.halo.material.opacity = 0.75 + n * 0.12;
       }
     }
@@ -555,6 +575,73 @@ export class TableScene {
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   };
+
+  /** Foam fizzing, the candle burning down, and click reactions. Returns true while something is moving. */
+  private animateProps(t: number): boolean {
+    const P = this.props;
+    if (!this.calm) for (const k of ['tankard', 'stein']) if (P[k]?.visible) P[k].userData.tick?.(t);
+    // The candle burns down over about 75 minutes of play.
+    if (t - this.lastBurn > 2) {
+      this.lastBurn = t;
+      const minutes = (performance.now() - this.startedAt) / 60000;
+      P.candle?.userData.burn?.(minutes / 75);
+    }
+    let moving = false;
+    for (const [obj, p] of this.pokes) {
+      const e = t - p.t0;
+      const done = e > (p.kind === 'hourglass' ? 1.2 : 1.1);
+      if (done) {
+        obj.rotation.copy(p.base);
+        obj.position.y = obj.userData.baseY ?? obj.position.y;
+        obj.userData.glint?.(1);
+        if (p.kind === 'candle') this.flare = 0;
+        this.pokes.delete(obj);
+        continue;
+      }
+      moving = true;
+      const decay = Math.exp(-e * 4);
+      if (p.kind === 'hourglass') {
+        // Flip end over end.
+        const k = Math.min(1, e / 0.9);
+        obj.rotation.set(p.base.x, p.base.y, p.base.z + Math.PI * (1 - Math.cos(k * Math.PI)) * 0.5);
+        obj.position.y = (obj.userData.baseY ?? 0) + Math.sin(k * Math.PI) * 4;
+        if (k >= 1) obj.rotation.copy(p.base);
+      } else if (p.kind === 'dagger') {
+        // Stuck in the wood, it twangs; a glint runs down the blade.
+        obj.rotation.set(p.base.x + Math.sin(e * 38) * 0.06 * decay, p.base.y, p.base.z + Math.sin(e * 31) * 0.05 * decay);
+        obj.userData.glint?.(Math.min(1, e / 0.55));
+      } else if (p.kind === 'coins') {
+        // Shaken: a hop and a jiggle.
+        obj.rotation.set(p.base.x + Math.sin(e * 30) * 0.12 * decay, p.base.y, p.base.z + Math.sin(e * 26 + 1) * 0.12 * decay);
+        obj.position.y = (obj.userData.baseY ?? 0) + Math.abs(Math.sin(e * 15)) * 0.8 * decay;
+      } else {
+        const amp = p.kind === 'barrel' || p.kind === 'chair' ? 0.025 : 0.08;
+        obj.rotation.set(p.base.x + Math.sin(e * 18) * amp * decay, p.base.y, p.base.z + Math.sin(e * 15 + 1) * amp * decay);
+      }
+      if (p.kind === 'candle') this.flare = decay;
+    }
+    return moving;
+  }
+
+  /** A click on the table: if it lands on a prop, it reacts. Returns what was clicked (for its sound). */
+  poke(clientX: number, clientY: number): PropKind | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const live = this.pokeables.filter((p) => p.obj.visible);
+    const hits = ray.intersectObjects(live.map((p) => p.obj), true);
+    if (!hits.length) return null;
+    let o: THREE.Object3D | null = hits[0].object;
+    let found: { obj: THREE.Object3D; kind: PropKind } | undefined;
+    while (o && !(found = live.find((p) => p.obj === o))) o = o.parent;
+    if (!found) return null;
+    const prev = this.pokes.get(found.obj);
+    if (found.obj.userData.baseY === undefined) found.obj.userData.baseY = found.obj.position.y;
+    this.pokes.set(found.obj, { t0: this.clock.elapsedTime, kind: found.kind, base: prev?.base ?? found.obj.rotation.clone() });
+    this.dirty = true;
+    return found.kind;
+  }
 
   dispose(): void {
     this.disposed = true;
