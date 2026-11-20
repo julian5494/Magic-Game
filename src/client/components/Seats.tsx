@@ -165,11 +165,40 @@ export function CommandSlot({
 }
 
 /** Library, graveyard and exile as 3D piles on the mat. */
-export function MatPiles({ p, view, onZone, w, flip }: { p: PlayerView; view: GameView; onZone: (z: ZoneOpen) => void; w: number; flip?: boolean }) {
+export function MatPiles({
+  p,
+  view,
+  onZone,
+  w,
+  flip,
+  onTop,
+  onHover,
+}: {
+  p: PlayerView;
+  view: GameView;
+  onZone: (z: ZoneOpen) => void;
+  w: number;
+  flip?: boolean;
+  /** Play the top card of the library (when a card lets you). */
+  onTop?: (id: CardId) => void;
+  onHover?: (c: CardView | null) => void;
+}) {
   const cards = (ids: CardId[]) => ids.map((id) => view.cards[id]).filter(Boolean);
+  const top = p.top ? view.cards[p.top] : undefined;
   return (
     <div className="mat-piles">
-      <Pile3D kind="library" count={p.libraryCount} cards={[]} w={w} label="Library" flip={flip} />
+      <Pile3D
+        kind="library"
+        count={p.libraryCount}
+        cards={[]}
+        w={w}
+        label={top && p.topRevealed ? 'Library (top revealed)' : 'Library'}
+        flip={flip}
+        top={top}
+        topPlayable={!!top && view.legal.some((a) => a.cardId === top.id)}
+        onTop={onTop}
+        onHover={onHover}
+      />
       <Pile3D kind="graveyard" count={p.graveyard.length} cards={cards(p.graveyard)} w={w} label="Graveyard" onClick={() => onZone({ title: `${p.name}'s graveyard`, cards: p.graveyard })} />
       <Pile3D kind="exile" count={p.exile.length} cards={cards(p.exile)} w={w} label="Exile" onClick={() => onZone({ title: `${p.name}'s exile`, cards: p.exile })} />
     </div>

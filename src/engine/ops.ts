@@ -1,7 +1,7 @@
 import type { CardFilter, Ctx, TargetSpec } from './cardtypes';
 import { getDef } from './registry';
 import {
-  alivePlayers, battlefieldCards, commanderIdentity, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
+  alivePlayers, battlefieldCards, cmc, commanderIdentity, controllerHasStatic, defOf, getKeywords, getPlayer, getPT, hasKeyword,
   hasType, log, matchesFilter, newId, opponentsOf, snapshot,
 } from './state';
 import type {
@@ -722,25 +722,98 @@ export function makeCtx(state: GameState, init: CtxInit): Ctx {
         privateCards: true,
       });
     },
-    lookAndTake(p, n, max, filter, label) {
+    lookAndTake(p, n, max, filter, label, opts = {}) {
       const lib = getPlayer(state, p).library;
       const top = lib.slice(0, n);
       if (top.length === 0) return;
       const eligible = top.filter((id) => !filter || matchesFilter(state, state.cards[id], filter, p, init.source));
+      const most = Math.min(max, eligible.length);
       queueDecision(state, {
         player: p,
         kind: 'chooseCards',
         prompt: label,
         cards: top,
-        min: 0,
-        max: Math.min(max, eligible.length),
+        min: opts.exact ? most : 0,
+        max: most,
         handler: 'core:lookAndTake',
-        data: { top, eligible },
+        data: { top, eligible, rest: opts.rest ?? 'bottom' },
+        privateCards: true,
+      });
+    },
+    arrangeTop(p, n, mayShuffle) {
+      const top = getPlayer(state, p).library.slice(0, n);
+      if (top.length === 0) return;
+      if (top.length === 1 && !mayShuffle) return;
+      queueDecision(state, {
+        player: p,
+        kind: 'chooseCards',
+        prompt: `Put these back in any order: click them from the top card down`,
+        cards: top,
+        min: top.length,
+        max: top.length,
+        handler: 'core:arrangeTop',
+        data: { top, mayShuffle: !!mayShuffle },
+        privateCards: true,
+      });
+    },
+    revealTopToHand(p) {
+      const id = getPlayer(state, p).library[0];
+      if (!id) return 0;
+      const c = state.cards[id];
+      log(state, `${getPlayer(state, p).name} reveals ${c.def} and puts it into their hand.`);
+      moveCard(state, id, 'hand');
+      return cmc(c);
+    },
+    putFromHandOnTop(p, n) {
+      const hand = getPlayer(state, p).hand;
+      const k = Math.min(n, hand.length);
+      if (k <= 0) return;
+      queueDecision(state, {
+        player: p,
+        kind: 'chooseCards',
+        prompt: `Put ${k} card${k === 1 ? '' : 's'} from your hand on top of your library (the first one you pick ends up on top)`,
+        cards: [...hand],
+        min: k,
+        max: k,
+        handler: 'core:putOnTop',
+        privateCards: true,
+      });
+    },
+    explore(creature) {
+      const c = state.cards[creature];
+      if (!c) return;
+      const pid = c.controller;
+      const id = getPlayer(state, pid).library[0];
+      if (!id) {
+        if (c.zone === 'battlefield') c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + 1;
+        return;
+      }
+      const top = state.cards[id];
+      log(state, `${c.def} explores, revealing ${top.def}.`);
+      if (hasType(top, 'Land')) {
+        moveCard(state, id, 'hand');
+        return;
+      }
+      if (c.zone === 'battlefield') c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + 1;
+      queueDecision(state, {
+        player: pid,
+        kind: 'chooseOption',
+        prompt: `${c.def} explored and revealed ${top.def}. Put it into your graveyard?`,
+        options: [
+          { id: 'yes', label: 'Put it into the graveyard' },
+          { id: 'no', label: 'Keep it on top' },
+        ],
+        cards: [id],
+        handler: 'core:explore',
+        data: { card: id },
         privateCards: true,
       });
     },
     chooseOption(p, prompt, options, key, data) {
       queueDecision(state, { player: p, kind: 'chooseOption', prompt, options, handler: 'card', data: { ctx: cardData, key, extra: data } });
+    },
+    defer(key) {
+      (state.continuations ??= []).push({ ctx: cardData, key });
     },
     chooseCards(p, prompt, cards, min, max, key, data, privateCards) {
       queueDecision(state, {

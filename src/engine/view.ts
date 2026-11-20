@@ -1,7 +1,7 @@
 import { legalActions, manaSources } from './game';
 import { getDef } from './registry';
 import {
-  attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, typeLine,
+  attachmentsOf, colorIdentity, defColors, defOf, getKeywords, getPlayer, getPT, hasType, staticsOf, typeLine,
 } from './state';
 import type {
   CardId, CardInstance, Color, FoilKind, Decision, GameState, Keyword, LogEntry, ManaSym, PlayableAction, PlayerId, Step, Target,
@@ -73,6 +73,10 @@ export interface PlayerView {
   mana: ManaAvailable;
   /** This player's commanders (wherever they are). */
   commanders: CardId[];
+  /** The top card of their library, when you're allowed to see it (looked at, or played revealed). */
+  top?: CardId;
+  /** True when everyone can see the top card (it's played revealed). */
+  topRevealed?: boolean;
 }
 
 export interface StackView {
@@ -169,6 +173,18 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     }
   }
 
+  // The top card of a library, for whoever may see it.
+  const topOf = (p: (typeof state.players)[number]): { top?: CardId; topRevealed?: boolean } => {
+    const id = p.library[0];
+    if (!id) return {};
+    const st = staticsOf(state, p.id);
+    const revealed = st.some((x) => x.kind === 'revealTop');
+    const mine = p.id === you && st.some((x) => x.kind === 'lookTop' || x.kind === 'playFromTop');
+    if (!revealed && !mine) return {};
+    add(id);
+    return { top: id, topRevealed: revealed };
+  };
+
   const decision = state.decisions.find((d) => d.player === you && (state.phase === 'mulligan' || d === state.decisions[0])) ?? null;
   if (decision?.cards) for (const id of decision.cards) add(id);
 
@@ -197,6 +213,7 @@ export function buildView(state: GameState, you: PlayerId): GameView {
     colorIdentity: p.commanders.flatMap((id) => (state.cards[id] ? colorIdentity(getDef(state.cards[id].def)) : [])),
     mana: availableMana(state, p.id),
     commanders: [...p.commanders],
+    ...topOf(p),
   }));
 
   const waitingOn =

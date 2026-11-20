@@ -715,6 +715,13 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .ctr-dice { position: absolute; left: 8%; bottom: 10%; display: flex; flex-direction: column-reverse; gap: 4px; transform-style: preserve-3d; transform: translateZ(2px); pointer-events: none; z-index: 6; }
 .ctr-die { position: relative; transform-style: preserve-3d; display: flex; align-items: center; gap: 3px; }
 .die6 { --s: 22px; position: relative; width: var(--s); height: var(--s); transform-style: preserve-3d; transform: translateZ(calc(var(--s) / 2)) rotateZ(-14deg); flex-shrink: 0; }
+.ctr-die .die6 { animation: dieTumble .55s cubic-bezier(.25, .8, .35, 1) both; }
+@keyframes dieTumble {
+  0% { transform: translateZ(calc(var(--s) * 2.2)) rotateX(220deg) rotateY(160deg) rotateZ(-60deg); }
+  70% { transform: translateZ(calc(var(--s) / 2)) rotateX(-8deg) rotateY(6deg) rotateZ(-10deg); }
+  100% { transform: translateZ(calc(var(--s) / 2)) rotateZ(-14deg); }
+}
+.calm .ctr-die .die6 { animation: none; }
 .die6 .f { position: absolute; inset: 0; border-radius: 18%; background: var(--dc); box-shadow: inset 0 0 0 1px #0004, inset 0 0 calc(var(--s) * 0.25) #0003; display: grid; place-items: center; }
 .die6 .f svg { width: 78%; height: 78%; fill: #fff8e6; }
 .die6 .top { transform: translateZ(calc(var(--s) / 2)); background: linear-gradient(135deg, color-mix(in srgb, var(--dc) 70%, #fff), var(--dc) 60%); }
@@ -928,3 +935,8 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .sound-board h1, .sound-board h2 { font-family: Cinzel, Georgia, serif; color: #ffd98a; }
 .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; max-width: 1100px; }
 .sound-grid .tbtn { padding: 10px 12px; }
+
+/* The top card of your library, face up when a card lets you look at it or play it. */
+.pile3d .top.face-up { background-size: cover; background-position: center; border-radius: 5%; cursor: default; box-shadow: 0 0 0 1px #000a; }
+.pile3d .top.face-up.playable { cursor: pointer; box-shadow: 0 0 0 2px var(--gold-glow, #ffd36a), 0 0 14px var(--amber, #ffb347); }
+.pile3d .top.face-up .loose-name { position: absolute; inset: 6px; font: 700 10px Inter, sans-serif; color: #f0dcb4; }

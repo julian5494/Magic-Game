@@ -9,8 +9,8 @@ import type {
 } from './cardtypes';
 import { parseCost } from './mana';
 import { parseCount, parseExpr } from './oracle-amounts';
-import { findDef, registerCards } from './registry';
-import { battlefieldCards, getPlayer, getPT, hasType, matchesFilter, opponentsOf } from './state';
+import { findDef, getDef, registerCards } from './registry';
+import { battlefieldCards, defColors, getPlayer, getPT, hasType, matchesFilter, opponentsOf } from './state';
 import type { CardType, Color, GameState, Keyword, ManaSym, PlayerId, Supertype } from './types';
 
 export interface ScryFace {
@@ -748,20 +748,71 @@ const SENTENCES: SentenceParser[] = [
   (s) => (/^proliferate$/i.test(s) ? { targets: [], run: (ctx) => ctx.proliferate() } : null),
   (s) => (/^you become the monarch$/i.test(s) ? { targets: [], run: (ctx) => ctx.becomeMonarch(ctx.controller) } : null),
   (s) => {
-    const m = s.match(/^LOOKTAKE (\d+) (\d+) ?(.*)$/);
+    const m = s.match(/^LOOKTAKE (\d+) (\d+)( exact)?( grave)? ?(.*)$/);
     if (!m) return null;
     let filter: CardFilter | null = null;
-    if (m[3]) {
-      const o = parseNouns(m[3]);
+    if (m[5]) {
+      const o = parseNouns(m[5]);
       if (!o) return null;
       filter = { ...o.filter, types: o.types };
     }
     const n = +m[1];
     const max = +m[2];
+    const exact = !!m[3];
+    const rest = m[4] ? ('graveyard' as const) : ('bottom' as const);
+    const what = `${max}${m[5] ? ` ${m[5]}` : ''}`;
     return {
       targets: [],
-      run: (ctx) => ctx.lookAndTake(ctx.controller, n, max, filter, `Look at the top ${n}: choose up to ${max}${m[3] ? ` ${m[3]}` : ''} to put into your hand`),
+      run: (ctx) =>
+        ctx.lookAndTake(ctx.controller, n, max, filter, `Look at the top ${n}: choose ${exact ? '' : 'up to '}${what} to put into your hand (the rest go ${rest === 'graveyard' ? 'into your graveyard' : 'on the bottom'})`, { exact, rest }),
     };
+  },
+  (s) => {
+    const m = s.match(/^ARRANGE (\d+)( shuffle)?$/);
+    return m ? { targets: [], run: (ctx) => ctx.arrangeTop(ctx.controller, +m[1], !!m[2]) } : null;
+  },
+  (s) => {
+    const m = s.match(/^REVEALTAKE( loselife)?$/);
+    if (!m) return null;
+    return {
+      targets: [],
+      run: (ctx) => {
+        const mv = ctx.revealTopToHand(ctx.controller);
+        if (m[1] && mv > 0) ctx.loseLife(ctx.controller, mv);
+      },
+    };
+  },
+  (s) => {
+    const m = s.match(/^REVEALALL (\d+) (.+)$/);
+    if (!m) return null;
+    const o = parseNouns(m[2]);
+    if (!o) return null;
+    const filter: CardFilter = { ...o.filter, types: o.types };
+    return {
+      targets: [],
+      run: (ctx) => {
+        const top = getPlayer(ctx.state, ctx.controller).library.slice(0, +m[1]);
+        for (const id of top) ctx.moveCard(id, matchesFilter(ctx.state, ctx.state.cards[id], filter, ctx.controller, ctx.source) ? 'hand' : 'graveyard');
+      },
+    };
+  },
+  (s) => {
+    if (/^exile the top card of your library$/i.test(s))
+      return { targets: [], run: (ctx) => { const top = getPlayer(ctx.state, ctx.controller).library[0]; if (top) ctx.moveCard(top, 'exile'); } };
+    if (/^put cardname on top of its owner's library$/i.test(s)) return { targets: [], run: (ctx) => ctx.moveCard(ctx.source, 'library') };
+    const m = s.match(/^put (a|one|two|three|\w+) cards? from your hand on top of your library(?: in any order)?$/i);
+    if (!m) return null;
+    const n = /^(a|one)$/i.test(m[1]) ? 1 : num(m[1]);
+    return typeof n === 'number' ? { targets: [], run: (ctx) => ctx.putFromHandOnTop(ctx.controller, n) } : null;
+  },
+  // Explore.
+  (s) => {
+    if (/^(?:cardname|it) explores$/i.test(s)) return { targets: [], run: (ctx) => ctx.explore(ctx.source) };
+    const m = s.match(/^(target creature you control) explores$/i);
+    if (!m) return null;
+    const t = parseTargets(m[1], 'self');
+    if (!t) return null;
+    return { targets: t, run: (ctx) => ctx.card(0) && ctx.explore(ctx.card(0)!.id) };
   },
   // "Counter target spell unless its controller pays {N}"
   (s) => {
@@ -1124,15 +1175,39 @@ function normalizeMulti(text: string): string {
       return `IMPULSE ${n} ${/next turn/i.test(all) ? 'nextturn' : 'thisturn'}. `;
     },
   );
-  // "Look at the top N cards of your library. (You may reveal) a/up to N <type> card(s) from among them and put it into your hand.
-  //  Put the rest on the bottom of your library in any/a random order."
+  // "Look at the top N cards of your library, then put them back in any order. (You may shuffle.)"
+  text = text.replace(
+    /Look at the top (\w+) cards of your library,? then put them back in any order\.?(\s*You may shuffle(?: your library)?\.?)?/gi,
+    (all, n, sh) => {
+      const nn = num(n);
+      return typeof nn === 'number' ? `ARRANGE ${nn}${sh ? ' shuffle' : ''}. ` : all;
+    },
+  );
+  // "Reveal the top card of your library and put that card into your hand. (You lose life equal to its mana value.)"
+  text = text.replace(
+    /reveal the top card of your library and put (?:that card|it) into your hand\.?(\s*You lose life equal to its mana value\.?)?/gi,
+    (_all, lose) => `REVEALTAKE${lose ? ' loselife' : ''}. `,
+  );
+  // "Reveal the top N cards of your library. Put all <type> cards revealed this way into your hand and the rest into your graveyard."
+  text = text.replace(
+    /Reveal the top (\w+) cards of your library\. Put all (.+?) cards revealed this way into your hand and the rest into your graveyard\.?/gi,
+    (all, n, kind) => {
+      const nn = num(n);
+      return typeof nn === 'number' ? `REVEALALL ${nn} ${kind}. ` : all;
+    },
+  );
+  // "Look at / Reveal the top N cards of your library. (You may reveal/put) a/up to N/two <type> card(s) from among them (and put it)
+  //  into your hand. Put the rest on the bottom of your library (in any order) / into your graveyard."
   return text.replace(
-    /Look at the top (\w+) cards of your library\. (?:You may reveal |Reveal |Put )?(an?|one|up to (\w+)) (?:(.+?) cards? )?(?:from among them|of them)(?:,? and put (?:it|them|that card|those cards))? into your hand(?: and the rest on the bottom of your library(?: in (?:any|a random) order)?)?\.?(?:\s*Put the rest (?:on the bottom of your library|into your graveyard)(?: in (?:any|a random) order)?\.?)?/gi,
+    /(?:Look at|Reveal) the top (\w+) cards of your library\. (?:You may reveal |You may put |Reveal |Put )?(an?|one|two|three|four|five|up to (\w+)) (?:(.+?) cards? )?(?:from among them|of them)(?:,? and put (?:it|them|that card|those cards))? into your hand(?: and the rest (?:on the bottom of your library|into your graveyard)(?: in (?:any|a random) order)?)?\.?(?:\s*Put the rest (?:on the bottom of your library|into your graveyard)(?: in (?:any|a random) order)?\.?)?/gi,
     (all, n, a, upTo, kind) => {
       const nn = num(n);
-      const max = upTo ? num(upTo) : 1;
-      if (typeof nn !== 'number' || typeof max !== 'number' || /graveyard/i.test(all)) return all;
-      return `LOOKTAKE ${nn} ${max}${kind ? ` ${kind}` : ''}. `;
+      const max = upTo ? num(upTo) : /^(an?|one)$/i.test(a) ? 1 : num(a);
+      if (typeof nn !== 'number' || typeof max !== 'number') return all;
+      // "Put two of them into your hand" is exact; "you may"/"up to" lets you take fewer.
+      const exact = !upTo && !/you may/i.test(all);
+      const grave = /rest into your graveyard/i.test(all);
+      return `LOOKTAKE ${nn} ${max}${exact ? ' exact' : ''}${grave ? ' grave' : ''}${kind ? ` ${kind}` : ''}. `;
     },
   );
 }
@@ -1165,17 +1240,24 @@ function parseEffect(text: string, def: CardDef, key: string, offset = 0): { tar
   const runFrom = (ctx: Ctx, start: number, scratch: Scratch) => {
     for (let i = start; i < pieces.length; i++) {
       const p = pieces[i];
+      const more = i + 1 < pieces.length;
       if (p.async) {
-        const then = i + 1 < pieces.length ? `${key}:after${i}` : undefined;
+        const then = more ? `${key}:after${i}` : undefined;
         if (p.async === 'scry') ctx.scry(ctx.controller, val(p.scryN!, ctx), then);
         else ctx.surveil(ctx.controller, val(p.scryN!, ctx), then);
         return;
       }
+      const asked = ctx.state.decisions.length;
       p.run(ctx, bases[i], scratch);
+      // A choice was asked for: the rest waits until it's made.
+      if (more && ctx.state.decisions.length > asked) {
+        ctx.defer(`${key}:after${i}`);
+        return;
+      }
     }
   };
   pieces.forEach((p, i) => {
-    if (p.async && i + 1 < pieces.length) def.handlers![`${key}:after${i}`] = (c2) => runFrom(c2, i + 1, {});
+    if (i + 1 < pieces.length) def.handlers![`${key}:after${i}`] = (c2) => runFrom(c2, i + 1, {});
     if (p.handlers) Object.assign(def.handlers!, p.handlers);
   });
   return { targets, effect: (ctx) => runFrom(ctx, 0, {}) };
@@ -1335,6 +1417,25 @@ function parseTrigger(cond: string): TrigSpec[] | null {
 
 // ---------- Statics ----------
 
+/**
+ * "spells", "creature spells", "noncreature spells", "artifact spells and colorless spells",
+ * "instant and sorcery spells", "Aura and Equipment spells" → which spells.
+ */
+function spellFilter(phrase: string): CardFilter | 'any' | null {
+  const p = phrase.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (p === 'spells') return 'any';
+  if (p === 'noncreature spells') return { notTypes: ['Creature'] };
+  if (p === 'artifact spells and colorless spells' || p === 'colorless spells and artifact spells')
+    return { custom: (_s, c) => getDef(c.def).types.includes('Artifact') || defColors(getDef(c.def)).length === 0 };
+  if (p === 'aura and equipment spells') return { custom: (_s, c) => ['Aura', 'Equipment'].some((t) => (getDef(c.def).subtypes ?? []).includes(t)) };
+  const TYPES: Record<string, CardType> = { creature: 'Creature', artifact: 'Artifact', enchantment: 'Enchantment', instant: 'Instant', sorcery: 'Sorcery', planeswalker: 'Planeswalker' };
+  const m = p.match(/^(\w+)(?: and (\w+))? spells$/);
+  if (!m) return null;
+  const types = [m[1], m[2]].filter(Boolean).map((t) => TYPES[t!]);
+  if (types.some((t) => !t)) return null;
+  return { types };
+}
+
 function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyword[]; dynamicPT?: CardDef['dynamicPT'] } | null {
   const l = line.replace(/\.$/, '');
   // Variable power/toughness.
@@ -1393,6 +1494,22 @@ function parseStatic(line: string): { statics?: StaticAbility[]; keywords?: Keyw
   }
   if (/^enchanted creature can't attack or block$/i.test(l)) return { statics: [{ kind: 'attached', cantAttackOrBlock: true }] };
   if (/^you have no maximum hand size$/i.test(l)) return { statics: [{ kind: 'noMaxHandSize' }] };
+  // The top of your library, and playing from other zones.
+  if (/^you may look at the top card of your library (?:at )?any time$/i.test(l)) return { statics: [{ kind: 'lookTop' }] };
+  if (/^play with the top card of your library revealed$/i.test(l)) return { statics: [{ kind: 'revealTop' }] };
+  if (/^you may play lands from the top of your library$/i.test(l)) return { statics: [{ kind: 'playFromTop', lands: true }] };
+  if (/^you may (?:play lands and cast spells|play cards) from the top of your library$/i.test(l)) return { statics: [{ kind: 'playFromTop', lands: true, spells: 'any' }] };
+  if (/^you may play lands from your graveyard$/i.test(l)) return { statics: [{ kind: 'landsFromGraveyard' }] };
+  let tm = l.match(/^you may cast (.+?) from the top of your library$/i);
+  if (tm) {
+    const f = spellFilter(tm[1]);
+    if (f) return { statics: [{ kind: 'playFromTop', spells: f }] };
+  }
+  tm = l.match(/^you may cast (.+?) as though (?:it|they) had flash$/i);
+  if (tm) {
+    const f = spellFilter(tm[1]);
+    if (f) return { statics: [{ kind: 'flash', filter: f === 'any' ? undefined : f }] };
+  }
   if (/^(?:this spell|cardname) can't be countered$/i.test(l)) return { statics: [{ kind: 'cantBeCountered' }] };
   if (/^cardname can't be blocked$/i.test(l)) return { keywords: ['Unblockable'] };
   return null;
@@ -1690,7 +1807,22 @@ export function convertScryfall(card: ScryCard): CardDef {
   if (isSpell) {
     if (spellEffects.length) {
       def.targets = spellTargets;
-      def.effect = (ctx) => spellEffects.forEach((e) => e(ctx));
+      // Paragraphs run in order; if one asks a question, the next waits for the answer.
+      const effects = [...spellEffects];
+      const runSpell = (ctx: Ctx, start: number) => {
+        for (let i = start; i < effects.length; i++) {
+          const asked = ctx.state.decisions.length;
+          effects[i](ctx);
+          if (i + 1 < effects.length && ctx.state.decisions.length > asked) {
+            ctx.defer(`spell:rest${i + 1}`);
+            return;
+          }
+        }
+      };
+      effects.forEach((_, i) => {
+        if (i > 0) (def.handlers ??= {})[`spell:rest${i}`] = (c2) => runSpell(c2, i);
+      });
+      def.effect = (ctx) => runSpell(ctx, 0);
     }
   }
   // Commander eligibility & partners.

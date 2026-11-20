@@ -120,7 +120,13 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   /** True while aiming (an attacker, a blocker, or a card pulled out of the hand). */
   const [aiming, setAiming] = useState(false);
   /** A card taken out of the hand (or command zone) to be played: shown above the hand until it's cast or cancelled. */
-  const [held, setHeld] = useState<CardId | null>(null);
+  const [held, setHeldState] = useState<CardId | null>(null);
+  // Where the held card came from (hand, command zone, graveyard, the top of the library...): it's put down once it leaves.
+  const heldZone = useRef<string | null>(null);
+  const setHeld = (id: CardId | null) => {
+    heldZone.current = id ? view.cards[id]?.zone ?? null : null;
+    setHeldState(id);
+  };
   // Lifting a card out of the hand makes a soft whoosh.
   const heldBefore = useRef<CardId | null>(null);
   useEffect(() => {
@@ -169,7 +175,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
       setPending(null);
     }
     if (menu && !view.legal.some((a) => a.cardId === menu.cardId)) setMenu(null);
-    if (held && !view.hand.includes(held) && !me.command.includes(held)) setHeld(null);
+    if (held && view.cards[held]?.zone !== heldZone.current) setHeld(null);
   }, [view]);
 
   // A held card goes back to the hand (or on to the stack) once nothing is being done with it.
@@ -266,6 +272,8 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
   };
 
   const actionsFor = (id: CardId) => view.legal.filter((a) => a.cardId === id);
+  /** A card outside the battlefield that you can play or use right now (from the graveyard, exile, the library top). */
+  const playableHere = (id: CardId) => actionsFor(id).some((a) => a.type === 'cast' || a.type === 'playLand' || a.type === 'activate');
 
   /** The buttons for a card's menu, built from what is legal right now. */
   const menuItems = (id: CardId): { label: string; run: () => void }[] => {
@@ -790,7 +798,7 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
     const cmd = inZone.length ? (
       <CommandSlot view={view} ids={inZone} cardProps={cardProps} onCardClick={(id) => (p.id === view.you ? onCardClick(id) : undefined)} onHover={setHover} w={side === 'near' ? (big ? 116 : 84) : big ? 96 : 70} />
     ) : null;
-    const piles = <MatPiles p={p} view={view} onZone={setZone} w={pileW} flip={side === 'far'} />;
+    const piles = <MatPiles p={p} view={view} onZone={setZone} w={pileW} flip={side === 'far'} onTop={(id) => playFromHand(id)} onHover={setHover} />;
     return (
       <section
         data-owner={p.id}
@@ -1243,7 +1251,20 @@ export function GameBoard({ view, net, send }: { view: GameView; net: NetState; 
         />
       )}
 
-      {zone && <ZoneModal zone={zone} view={view} onClose={() => setZone(null)} onHover={setHover} />}
+      {zone && (
+        <ZoneModal
+          zone={zone}
+          view={view}
+          onClose={() => setZone(null)}
+          onHover={setHover}
+          // Your own cards that can be played from here (flashback, lands from the graveyard...).
+          selectable={zone.cards.some(playableHere) ? playableHere : undefined}
+          onPick={(id) => {
+            setZone(null);
+            playFromHand(id);
+          }}
+        />
+      )}
 
       {view.phase === 'over' && (
         <div className="modal-backdrop">

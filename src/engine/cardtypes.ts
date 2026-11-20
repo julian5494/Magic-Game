@@ -114,10 +114,20 @@ export interface Ctx {
   addManaChoice(player: PlayerId, n: number, colors: ManaSym[] | 'any' | 'identity'): void;
   becomeMonarch(player: PlayerId): void;
   /** Look at the top N cards and choose up to `max` matching `filter` to put in hand; rest on bottom. */
-  lookAndTake(player: PlayerId, n: number, max: number, filter: CardFilter | null, label: string): void;
+  lookAndTake(player: PlayerId, n: number, max: number, filter: CardFilter | null, label: string, opts?: { exact?: boolean; rest?: 'bottom' | 'graveyard' }): void;
+  /** Look at the top N cards and put them back in any order (the player orders them; optionally may shuffle after). */
+  arrangeTop(player: PlayerId, n: number, mayShuffle?: boolean): void;
+  /** Reveal the top card and put it into your hand; returns its mana value (0 if the library is empty). */
+  revealTopToHand(player: PlayerId): number;
+  /** The creature explores: reveal the top card; a land goes to hand, otherwise a +1/+1 counter and you may mill it. */
+  explore(creature: CardId): void;
+  /** The player puts N cards from their hand on top of their library, in the order they pick (first pick on top). */
+  putFromHandOnTop(player: PlayerId, n: number): void;
   /** Ask a yes/no or multiple-choice question, continue in def.handlers[key]. */
   chooseOption(player: PlayerId, prompt: string, options: { id: string; label: string }[], key: string, data?: any): void;
   chooseCards(player: PlayerId, prompt: string, cards: CardId[], min: number, max: number, key: string, data?: any, privateCards?: boolean): void;
+  /** Continue in def.handlers[key] once every pending choice has been made. */
+  defer(key: string): void;
 }
 
 export type Effect = (ctx: Ctx) => void;
@@ -221,7 +231,17 @@ export type StaticAbility =
   | { kind: 'extraLand'; n: number }
   | { kind: 'preventNoncombatDamageToOtherCreatures' }
   | { kind: 'cantBeCountered' }
-  | { kind: 'oppsCantMakeYouSacrifice' };
+  | { kind: 'oppsCantMakeYouSacrifice' }
+  /** "You may look at the top card of your library any time." */
+  | { kind: 'lookTop' }
+  /** "Play with the top card of your library revealed." */
+  | { kind: 'revealTop' }
+  /** "You may play lands / cast (creature, artifact...) spells from the top of your library." */
+  | { kind: 'playFromTop'; lands?: boolean; spells?: CardFilter | 'any' }
+  /** "You may play lands from your graveyard." */
+  | { kind: 'landsFromGraveyard' }
+  /** "You may cast (creature/noncreature...) spells as though they had flash." */
+  | { kind: 'flash'; filter?: CardFilter };
 
 export interface CastVariant {
   label: string;

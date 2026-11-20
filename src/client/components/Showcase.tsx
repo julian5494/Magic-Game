@@ -250,16 +250,20 @@ function effectsScene(): GameView {
     ...lands('p2', 'Island', 6, 6),
   ];
   const hand = ['Swords to Plowshares', 'Thragtusk', 'Lightning Greaves', 'Forest'].map((nm) => card(nm, 'me', ['Card'], { zone: 'hand' }));
+  // Courser of Kruphix-style: your top card is revealed on the library pile.
+  const top = card('Cultivate', 'me', ['Sorcery'], { zone: 'library' });
   const others = [card('Krenko, Mob Boss', 'p3', ['Legendary', 'Creature'], { pt: [3, 3], commander: true }), ...lands('p3', 'Mountain', 4), card('Talrand, Sky Summoner', 'p4', ['Legendary', 'Creature'], { pt: [2, 2], commander: true }), ...lands('p4', 'Island', 5, 2)];
   const players = [
     player('me', 'You', 38, [cmd.id], {
+      top: top.id,
+      topRevealed: true,
       mana: { total: 12, groups: [{ produces: ['G'], amount: 3, costly: 0 }, { produces: ['W'], amount: 3, costly: 0 }, { produces: ['W', 'U', 'B', 'R', 'G'], amount: 4, costly: 2 }, { produces: ['C'], amount: 2, costly: 0 }] },
     }),
     player('p2', 'Morgan', 31, [opp[3].id], { graveyard: [opp[2].id] }),
     player('p3', 'Riley', 17, [others[0].id], { commanderDamage: [] }),
     player('p4', 'Alex', 40, [others[5].id]),
   ];
-  return base([...mine, ...opp, ...hand, ...others], players, {});
+  return base([...mine, ...opp, ...hand, ...others, top], players, {});
 }
 
 function combatScene(declaring = false): GameView {

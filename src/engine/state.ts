@@ -1,4 +1,4 @@
-import type { CardDef, CardFilter } from './cardtypes';
+import type { CardDef, CardFilter, StaticAbility } from './cardtypes';
 import { costColors, manaValue } from './mana';
 import { getDef } from './registry';
 import type {
@@ -88,6 +88,13 @@ export function cmc(card: CardInstance | Snapshot): number {
 
 export function isLegendary(card: CardInstance): boolean {
   return (defOf(card).supertypes ?? []).includes('Legendary');
+}
+
+/** Static abilities of the permanents a player controls. */
+export function staticsOf(state: GameState, pid: PlayerId): StaticAbility[] {
+  const out: StaticAbility[] = [];
+  for (const c of battlefieldCards(state)) if (c.controller === pid) for (const st of defOf(c).statics ?? []) out.push(st);
+  return out;
 }
 
 export function battlefieldCards(state: GameState): CardInstance[] {

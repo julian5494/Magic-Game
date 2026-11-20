@@ -272,6 +272,11 @@ export interface GameState {
   pendingTriggers: PendingTrigger[];
   events: GameEvent[];
   decisions: Decision[];
+  /**
+   * The rest of an effect waiting on a player's choice ("look at the top three, put them back in any order. Draw a card."):
+   * each runs, in order, once no decisions are pending.
+   */
+  continuations?: { ctx: any; key: string }[];
   log: LogEntry[];
   seed: number;
   nextId: number;

@@ -331,7 +331,8 @@ function Counters({ card, w }: { card: CardView; w: number }) {
     <div className="ctr-dice">
       {list.map(([k, n]) => (
         <div key={k} className="ctr-die">
-          <Die6 value={n} kind={k === '+1/+1' ? 'plus' : k === '-1/-1' ? 'minus' : 'other'} size={size} />
+          {/* Keyed by the count, so the die tumbles onto its new number whenever it changes. */}
+          <Die6 key={n} value={n} kind={k === '+1/+1' ? 'plus' : k === '-1/-1' ? 'minus' : 'other'} size={size} />
           {k !== '+1/+1' && k !== '-1/-1' && <span className="ctr-label">{k}</span>}
         </div>
       ))}
@@ -368,6 +369,10 @@ export function Pile3D({
   label,
   onClick,
   flip,
+  top,
+  topPlayable,
+  onTop,
+  onHover,
 }: {
   kind: 'library' | 'graveyard' | 'exile';
   count: number;
@@ -376,6 +381,11 @@ export function Pile3D({
   label: string;
   onClick?: () => void;
   flip?: boolean;
+  /** The library's top card, when you may see it (face up on the pile). */
+  top?: CardView;
+  topPlayable?: boolean;
+  onTop?: (id: CardId) => void;
+  onHover?: (c: CardView | null) => void;
 }) {
   const h = Math.round(w * 1.396);
   const t = kind === 'library' ? Math.max(count ? 3 : 0, Math.round((count * w) / 330)) : Math.min(cards.length, 3) * 2;
@@ -395,7 +405,23 @@ export function Pile3D({
           <>
             <div className="front" />
             <div className={`side ${flip ? 'r' : ''}`} />
-            <div className="top cardback" />
+            {top ? (
+              <div
+                className={`top face-up ${topPlayable ? 'playable' : ''}`}
+                data-card-id={top.id}
+                style={{ backgroundImage: imagesEnabled() ? `url("${fullUrl(top)}")` : undefined }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTop?.(top.id);
+                }}
+                onMouseEnter={() => onHover?.(top)}
+                onMouseLeave={() => onHover?.(null)}
+              >
+                {!imagesEnabled() && <span className="loose-name">{top.name}</span>}
+              </div>
+            ) : (
+              <div className="top cardback" />
+            )}
           </>
         )
       ) : (

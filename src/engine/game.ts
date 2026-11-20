@@ -1,4 +1,4 @@
-import type { ActivatedAbility, CardDef, CastVariant } from './cardtypes';
+import type { ActivatedAbility, CardDef, CastVariant, StaticAbility } from './cardtypes';
 import type { ManaCost, ManaSource } from './mana';
 import { costVariants, emptyPool, parseCost, payFromPool, solvePayment } from './mana';
 import {
@@ -12,7 +12,7 @@ import {
 } from './rules';
 import {
   alivePlayers, battlefieldCards, commanderIdentity, defOf, getKeywords, getPlayer, hasKeyword, hasType, isMainPhase,
-  log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot,
+  log, matchesFilter, newId, nextPlayer, opponentsOf, snapshot, staticsOf,
 } from './state';
 import type {
   Action, CardId, CardInstance, CardLook, Decision, DecisionAnswer, GameState, ManaSym, PlayableAction, PlayerId, Snapshot, StackItem,
@@ -154,6 +154,23 @@ function defaultLabel(kind: string): string {
   }
 }
 
+/** Cards a player may play from somewhere other than their hand, thanks to static abilities they control. */
+export function playableElsewhere(
+  state: GameState,
+  pid: PlayerId,
+  statics: StaticAbility[] = staticsOf(state, pid),
+): { topLands: CardId[]; topSpells: CardId[]; graveyardLands: CardId[] } {
+  const p = getPlayer(state, pid);
+  const top = p.library[0] ? state.cards[p.library[0]] : undefined;
+  const fromTop = statics.filter((st): st is Extract<StaticAbility, { kind: 'playFromTop' }> => st.kind === 'playFromTop');
+  const isLand = !!top && hasType(top, 'Land');
+  const topLands = top && isLand && fromTop.some((st) => st.lands) ? [top.id] : [];
+  const topSpells =
+    top && !isLand && fromTop.some((st) => st.spells && (st.spells === 'any' || matchesFilter(state, top, st.spells, pid, top.id))) ? [top.id] : [];
+  const graveyardLands = statics.some((st) => st.kind === 'landsFromGraveyard') ? p.graveyard.filter((id) => hasType(state.cards[id], 'Land')) : [];
+  return { topLands, topSpells, graveyardLands };
+}
+
 export function canAct(state: GameState, pid: PlayerId): boolean {
   return state.phase === 'playing' && state.decisions.length === 0 && state.priority === pid;
 }
@@ -168,15 +185,12 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
   const impulse = Object.values(state.cards)
     .filter((c) => c.zone === 'exile' && c.playableBy?.player === pid && c.playableBy.untilTurn >= state.turn)
     .map((c) => c.id);
-  const landDrops =
-    1 +
-    (p.extraLandsThisTurn ?? 0) +
-    battlefieldCards(state)
-      .filter((c) => c.controller === pid)
-      .flatMap((c) => defOf(c).statics ?? [])
-      .reduce((n, st) => n + (st.kind === 'extraLand' ? st.n : 0), 0);
+  const statics = staticsOf(state, pid);
+  const landDrops = 1 + (p.extraLandsThisTurn ?? 0) + statics.reduce((n, st) => n + (st.kind === 'extraLand' ? st.n : 0), 0);
+  // Playing from other places: the top of the library (Courser of Kruphix, Future Sight...) and lands from the graveyard.
+  const { topLands, topSpells, graveyardLands } = playableElsewhere(state, pid, statics);
   if (sorcery && p.landsPlayed < landDrops) {
-    for (const id of [...p.hand, ...impulse]) {
+    for (const id of [...p.hand, ...impulse, ...topLands, ...graveyardLands]) {
       const def = defOf(state.cards[id]);
       if (hasType(state.cards[id], 'Land') && !def.cannotCast) out.push({ type: 'playLand', cardId: id, label: 'Play land', targets: [] });
       const back = def.backFace ? getDef(def.backFace) : null;
@@ -184,13 +198,17 @@ export function legalActions(state: GameState, pid: PlayerId): PlayableAction[] 
     }
   }
 
-  for (const id of [...p.hand, ...p.command, ...p.graveyard, ...impulse]) {
+  const flash = statics.filter((st): st is Extract<StaticAbility, { kind: 'flash' }> => st.kind === 'flash');
+  for (const id of [...p.hand, ...p.command, ...p.graveyard, ...impulse, ...topSpells]) {
     const card = state.cards[id];
     const def = defOf(card);
     if (def.types.includes('Land') || def.cannotCast) continue;
     const fromGraveyard = card.zone === 'graveyard';
     if (fromGraveyard && !def.castVariants?.some((v) => v.zone === 'graveyard')) continue;
-    const instantSpeed = def.types.includes('Instant') || (def.keywords ?? []).includes('Flash');
+    const instantSpeed =
+      def.types.includes('Instant') ||
+      (def.keywords ?? []).includes('Flash') ||
+      flash.some((st) => !st.filter || matchesFilter(state, card, st.filter, pid, id));
     if (!instantSpeed && !sorcery) continue;
     let costCards: CardId[] | undefined;
     let costLabel: string | undefined;
@@ -599,6 +617,8 @@ function applyDecision(state: GameState, pid: PlayerId, decisionId: string, answ
   const h = HANDLERS[d.handler];
   if (!h) throw new Error(`No handler ${d.handler}`);
   h(state, d, answer);
+  // Effects that were waiting on these choices carry on.
+  while (state.decisions.length === 0 && state.continuations?.length) runCardHandler(state, state.continuations.shift()!, {});
 }
 
 type Handler = (state: GameState, d: Decision, a: DecisionAnswer) => void;
@@ -839,7 +859,49 @@ const HANDLERS: Record<string, Handler> = {
     const chosen = a.cards ?? [];
     if (chosen.some((c) => !d.data.eligible.includes(c))) throw new RulesError("You can't take that card");
     for (const id of chosen) moveCard(state, id, 'hand');
-    for (const id of d.data.top as string[]) if (!chosen.includes(id) && state.cards[id]?.zone === 'library') moveCard(state, id, 'library', { bottom: true });
+    const toGraveyard = d.data.rest === 'graveyard';
+    for (const id of d.data.top as string[]) {
+      if (chosen.includes(id) || state.cards[id]?.zone !== 'library') continue;
+      if (toGraveyard) moveCard(state, id, 'graveyard');
+      else moveCard(state, id, 'library', { bottom: true });
+    }
+  },
+  'core:arrangeTop': (state, d, a) => {
+    const top: string[] = d.data.top;
+    const order = a.cards ?? [];
+    if (order.length !== top.length || order.some((c) => !top.includes(c)) || new Set(order).size !== order.length) throw new RulesError('Put every card back, each once');
+    const lib = getPlayer(state, d.player).library;
+    // Only cards still in the library are put back (in case something moved one meanwhile).
+    const still = order.filter((id) => lib.includes(id));
+    const rest = lib.filter((id) => !still.includes(id));
+    lib.splice(0, lib.length, ...still, ...rest);
+    log(state, `${getPlayer(state, d.player).name} puts ${order.length} card${order.length === 1 ? '' : 's'} back on top in a chosen order.`);
+    if (d.data.mayShuffle)
+      queueDecision(state, {
+        player: d.player,
+        kind: 'chooseOption',
+        prompt: 'Shuffle your library?',
+        options: [
+          { id: 'no', label: 'Keep them on top' },
+          { id: 'yes', label: 'Shuffle' },
+        ],
+        handler: 'core:mayShuffle',
+      });
+  },
+  'core:mayShuffle': (state, d, a) => {
+    if (a.option !== 'yes') return;
+    shuffle(state, getPlayer(state, d.player).library);
+    log(state, `${getPlayer(state, d.player).name} shuffles their library.`);
+  },
+  'core:putOnTop': (state, d, a) => {
+    const cards = a.cards ?? [];
+    const hand = getPlayer(state, d.player).hand;
+    if (cards.length !== d.min || cards.some((c) => !hand.includes(c))) throw new RulesError('Choose cards from your hand');
+    for (let i = cards.length - 1; i >= 0; i--) moveCard(state, cards[i], 'library');
+  },
+  'core:explore': (state, d, a) => {
+    const c = state.cards[d.data.card];
+    if (a.option === 'yes' && c?.zone === 'library') moveCard(state, c.id, 'graveyard');
   },
   card: (state, d, a) => runCardHandler(state, d.data, a),
 };
